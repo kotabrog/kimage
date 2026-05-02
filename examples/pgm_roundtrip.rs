@@ -41,11 +41,7 @@ fn gradient_gray8(width: u32, height: u32) -> Vec<u8> {
 
     for y in 0..height {
         for x in 0..width {
-            let value = if scale == 0 {
-                0
-            } else {
-                ((x + y) * 255 / scale) as u8
-            };
+            let value = ((x + y) * 255).checked_div(scale).unwrap_or(0) as u8;
             pixels.push(value);
         }
     }
