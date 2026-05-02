@@ -1,6 +1,6 @@
 SHELL := bash
 CARGO := cargo
-CARGOFLAGS ?= --workspace
+CARGOFLAGS ?=
 
 .PHONY: all ci fmt fmt-check lint check test
 
@@ -18,7 +18,7 @@ fmt-check:
 lint:
 	RUSTFLAGS="-D warnings" $(CARGO) clippy $(CARGOFLAGS) --all-targets -- -D warnings
 
-# Fast type-check of the workspace
+# Fast type-check
 check:
 	$(CARGO) check $(CARGOFLAGS) --all-targets
 
@@ -26,5 +26,5 @@ check:
 test:
 	$(CARGO) test $(CARGOFLAGS) --all-targets
 
-# CI entry: verify format and lint
-ci: fmt-check lint
+# CI entry: verify format, lint, and tests
+ci: fmt-check lint test
