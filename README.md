@@ -13,3 +13,11 @@ cargo run --example ppm_roundtrip
 ```
 
 The example writes `target/examples/ppm_roundtrip.ppm`.
+
+Run the PGM roundtrip example to write and read back a small grayscale gradient image:
+
+```sh
+cargo run --example pgm_roundtrip
+```
+
+The example writes `target/examples/pgm_roundtrip.pgm`.
