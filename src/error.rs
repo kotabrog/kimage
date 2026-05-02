@@ -1,10 +1,17 @@
 use std::fmt;
+use std::io::ErrorKind;
 
 use crate::PixelFormat;
 
 /// Error type used by image decoding, encoding, and buffer validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageError {
+    /// A lower-level IO operation failed.
+    Io { kind: ErrorKind },
+    /// The image header is malformed.
+    InvalidHeader { reason: &'static str },
+    /// The image payload is malformed.
+    InvalidData { reason: &'static str },
     /// The provided pixel buffer does not match the expected size.
     InvalidBufferLength { expected: usize, actual: usize },
     /// The provided row stride is too small for the image width and pixel format.
@@ -27,6 +34,9 @@ pub type Result<T> = std::result::Result<T, ImageError>;
 impl fmt::Display for ImageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Io { kind } => write!(f, "io error: {kind}"),
+            Self::InvalidHeader { reason } => write!(f, "invalid image header: {reason}"),
+            Self::InvalidData { reason } => write!(f, "invalid image data: {reason}"),
             Self::InvalidBufferLength { expected, actual } => {
                 write!(
                     f,
@@ -58,6 +68,12 @@ impl fmt::Display for ImageError {
 }
 
 impl std::error::Error for ImageError {}
+
+impl From<std::io::Error> for ImageError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io { kind: error.kind() }
+    }
+}
 
 #[cfg(test)]
 mod tests {
