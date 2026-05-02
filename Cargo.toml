@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A small image IO crate built step by step with the Rust standard library."
-repository = "https://github.com/ksuzuki/kimage"
+repository = "https://github.com/kotabrog/kimage"
 readme = "README.md"
 
 [dependencies]
