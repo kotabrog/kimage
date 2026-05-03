@@ -1,6 +1,9 @@
 use std::io::{Read, Write};
 
-use crate::codecs::netpbm::HeaderParser;
+use crate::codecs::netpbm::{
+    HeaderParser, read_bitmap_header, reject_trailing_tokens, validate_image_view,
+    write_bitmap_header,
+};
 use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
 const ASCII_MAGIC: &[u8] = b"P1";
@@ -17,17 +20,9 @@ pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
     reader.read_to_end(&mut data)?;
 
     let mut parser = HeaderParser::new(&data);
-    let magic = parser.next_token()?;
+    let dimensions = read_bitmap_header(&mut parser, ASCII_MAGIC)?;
 
-    if magic != ASCII_MAGIC {
-        return Err(ImageError::UnsupportedFormat);
-    }
-
-    let width = parser.next_u32("width")?;
-    let height = parser.next_u32("height")?;
-    validate_dimensions(width, height)?;
-
-    let expected = width as usize * height as usize;
+    let expected = dimensions.width as usize * dimensions.height as usize;
     let mut pixels = Vec::with_capacity(expected);
 
     for _ in 0..expected {
@@ -35,13 +30,14 @@ pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
         pixels.push(pbm_sample_to_gray8(sample)?);
     }
 
-    if parser.has_more_tokens() {
-        return Err(ImageError::InvalidData {
-            reason: "too many samples",
-        });
-    }
+    reject_trailing_tokens(&mut parser)?;
 
-    Image::new(width, height, PixelFormat::Gray8, pixels)
+    Image::new(
+        dimensions.width,
+        dimensions.height,
+        PixelFormat::Gray8,
+        pixels,
+    )
 }
 
 /// Decodes a binary PBM P4 image.
@@ -53,31 +49,22 @@ pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
     reader.read_to_end(&mut data)?;
 
     let mut parser = HeaderParser::new(&data);
-    let magic = parser.next_token()?;
-
-    if magic != BINARY_MAGIC {
-        return Err(ImageError::UnsupportedFormat);
-    }
-
-    let width = parser.next_u32("width")?;
-    let height = parser.next_u32("height")?;
-    validate_dimensions(width, height)?;
+    let dimensions = read_bitmap_header(&mut parser, BINARY_MAGIC)?;
     parser.consume_raster_separator()?;
 
-    let row_bytes = pbm_row_bytes(width)?;
-    let expected_raster_len =
-        row_bytes
-            .checked_mul(height as usize)
-            .ok_or(ImageError::ImageDimensionsTooLarge {
-                width,
-                height,
-                bytes_per_pixel: PixelFormat::Gray8.bytes_per_pixel(),
-            })?;
+    let row_bytes = pbm_row_bytes(dimensions.width)?;
+    let expected_raster_len = row_bytes.checked_mul(dimensions.height as usize).ok_or(
+        ImageError::ImageDimensionsTooLarge {
+            width: dimensions.width,
+            height: dimensions.height,
+            bytes_per_pixel: PixelFormat::Gray8.bytes_per_pixel(),
+        },
+    )?;
     let raster_start = parser.position();
     let raster_end = raster_start.checked_add(expected_raster_len).ok_or(
         ImageError::ImageDimensionsTooLarge {
-            width,
-            height,
+            width: dimensions.width,
+            height: dimensions.height,
             bytes_per_pixel: PixelFormat::Gray8.bytes_per_pixel(),
         },
     )?;
@@ -89,21 +76,26 @@ pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
         });
     }
 
-    let mut pixels = Vec::with_capacity(width as usize * height as usize);
+    let mut pixels = Vec::with_capacity(dimensions.width as usize * dimensions.height as usize);
     let raster = &data[raster_start..raster_end];
 
-    for row in 0..height as usize {
+    for row in 0..dimensions.height as usize {
         let row_start = row * row_bytes;
         let row_data = &raster[row_start..row_start + row_bytes];
 
-        for x in 0..width as usize {
+        for x in 0..dimensions.width as usize {
             let byte = row_data[x / 8];
             let bit = (byte >> (7 - (x % 8))) & 1;
             pixels.push(pbm_bit_to_gray8(bit));
         }
     }
 
-    Image::new(width, height, PixelFormat::Gray8, pixels)
+    Image::new(
+        dimensions.width,
+        dimensions.height,
+        PixelFormat::Gray8,
+        pixels,
+    )
 }
 
 /// Encodes an image view as ASCII PBM P1.
@@ -111,10 +103,9 @@ pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
 /// `PixelFormat::Gray8` values are thresholded: values below 128 become black,
 /// and values 128 or above become white.
 pub fn encode_ascii<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
-    let image = validate_gray8_image_view(image)?;
+    let image = validate_image_view(image, PixelFormat::Gray8)?;
 
-    writeln!(writer, "P1")?;
-    writeln!(writer, "{} {}", image.width, image.height)?;
+    write_bitmap_header(writer, "P1", image)?;
 
     let row_len = image.width as usize;
 
@@ -140,10 +131,9 @@ pub fn encode_ascii<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()
 /// `PixelFormat::Gray8` values are thresholded: values below 128 become black,
 /// and values 128 or above become white.
 pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
-    let image = validate_gray8_image_view(image)?;
+    let image = validate_image_view(image, PixelFormat::Gray8)?;
 
-    writeln!(writer, "P4")?;
-    writeln!(writer, "{} {}", image.width, image.height)?;
+    write_bitmap_header(writer, "P4", image)?;
 
     let row_len = image.width as usize;
     let row_bytes = pbm_row_bytes(image.width)?;
@@ -171,38 +161,6 @@ pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn validate_dimensions(width: u32, height: u32) -> Result<()> {
-    if width == 0 || height == 0 {
-        return Err(ImageError::InvalidHeader {
-            reason: "width and height must be greater than zero",
-        });
-    }
-
-    Ok(())
-}
-
-fn validate_gray8_image_view(image: ImageView<'_>) -> Result<ImageView<'_>> {
-    if image.pixel_format != PixelFormat::Gray8 {
-        return Err(ImageError::UnsupportedPixelFormat {
-            pixel_format: image.pixel_format,
-        });
-    }
-
-    if image.width == 0 || image.height == 0 {
-        return Err(ImageError::InvalidData {
-            reason: "width and height must be greater than zero",
-        });
-    }
-
-    ImageView::new(
-        image.width,
-        image.height,
-        image.pixel_format,
-        image.stride,
-        image.data,
-    )
 }
 
 fn pbm_row_bytes(width: u32) -> Result<usize> {

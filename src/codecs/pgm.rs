@@ -1,11 +1,13 @@
 use std::io::{Read, Write};
 
-use crate::codecs::netpbm::HeaderParser;
-use crate::{Image, ImageError, ImageView, PixelFormat, Result};
+use crate::codecs::netpbm::{
+    HeaderParser, read_ascii_samples, read_sample_header, validate_image_view, write_packed_rows,
+    write_sample_header,
+};
+use crate::{Image, ImageView, PixelFormat, Result};
 
 const MAGIC: &[u8] = b"P5";
 const ASCII_MAGIC: &[u8] = b"P2";
-const MAX_VALUE: u32 = 255;
 
 /// Decodes a binary PGM P5 image.
 ///
@@ -15,33 +17,13 @@ pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
     reader.read_to_end(&mut data)?;
 
     let mut parser = HeaderParser::new(&data);
-    let magic = parser.next_token()?;
-
-    if magic != MAGIC {
-        return Err(ImageError::UnsupportedFormat);
-    }
-
-    let width = parser.next_u32("width")?;
-    let height = parser.next_u32("height")?;
-    let max_value = parser.next_u32("max value")?;
-
-    if width == 0 || height == 0 {
-        return Err(ImageError::InvalidHeader {
-            reason: "width and height must be greater than zero",
-        });
-    }
-
-    if max_value != MAX_VALUE {
-        return Err(ImageError::InvalidHeader {
-            reason: "only max value 255 is supported",
-        });
-    }
+    let dimensions = read_sample_header(&mut parser, MAGIC)?;
 
     parser.consume_raster_separator()?;
 
     Image::new(
-        width,
-        height,
+        dimensions.width,
+        dimensions.height,
         PixelFormat::Gray8,
         data[parser.position()..].to_vec(),
     )
@@ -55,110 +37,38 @@ pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
     reader.read_to_end(&mut data)?;
 
     let mut parser = HeaderParser::new(&data);
-    let magic = parser.next_token()?;
+    let dimensions = read_sample_header(&mut parser, ASCII_MAGIC)?;
 
-    if magic != ASCII_MAGIC {
-        return Err(ImageError::UnsupportedFormat);
-    }
+    let expected = dimensions.width as usize
+        * dimensions.height as usize
+        * PixelFormat::Gray8.bytes_per_pixel();
+    let pixels = read_ascii_samples(&mut parser, expected)?;
 
-    let width = parser.next_u32("width")?;
-    let height = parser.next_u32("height")?;
-    let max_value = parser.next_u32("max value")?;
-
-    if width == 0 || height == 0 {
-        return Err(ImageError::InvalidHeader {
-            reason: "width and height must be greater than zero",
-        });
-    }
-
-    if max_value != MAX_VALUE {
-        return Err(ImageError::InvalidHeader {
-            reason: "only max value 255 is supported",
-        });
-    }
-
-    let expected = width as usize * height as usize * PixelFormat::Gray8.bytes_per_pixel();
-    let mut pixels = Vec::with_capacity(expected);
-
-    for _ in 0..expected {
-        pixels.push(parser.next_u8_sample(max_value)?);
-    }
-
-    if parser.has_more_tokens() {
-        return Err(ImageError::InvalidData {
-            reason: "too many samples",
-        });
-    }
-
-    Image::new(width, height, PixelFormat::Gray8, pixels)
+    Image::new(
+        dimensions.width,
+        dimensions.height,
+        PixelFormat::Gray8,
+        pixels,
+    )
 }
 
 /// Encodes an image view as binary PGM P5.
 ///
 /// This initial implementation supports only `PixelFormat::Gray8`.
 pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
-    if image.pixel_format != PixelFormat::Gray8 {
-        return Err(ImageError::UnsupportedPixelFormat {
-            pixel_format: image.pixel_format,
-        });
-    }
+    let image = validate_image_view(image, PixelFormat::Gray8)?;
 
-    if image.width == 0 || image.height == 0 {
-        return Err(ImageError::InvalidData {
-            reason: "width and height must be greater than zero",
-        });
-    }
-
-    let image = ImageView::new(
-        image.width,
-        image.height,
-        image.pixel_format,
-        image.stride,
-        image.data,
-    )?;
-
-    writeln!(writer, "P5")?;
-    writeln!(writer, "{} {}", image.width, image.height)?;
-    writeln!(writer, "{MAX_VALUE}")?;
-
-    let row_len = image.width as usize * PixelFormat::Gray8.bytes_per_pixel();
-
-    for row in 0..image.height as usize {
-        let start = row * image.stride;
-        let end = start + row_len;
-        writer.write_all(&image.data[start..end])?;
-    }
-
-    Ok(())
+    write_sample_header(writer, "P5", image)?;
+    write_packed_rows(writer, image)
 }
 
 /// Encodes an image view as ASCII PGM P2.
 ///
 /// This initial implementation supports only `PixelFormat::Gray8`.
 pub fn encode_ascii<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
-    if image.pixel_format != PixelFormat::Gray8 {
-        return Err(ImageError::UnsupportedPixelFormat {
-            pixel_format: image.pixel_format,
-        });
-    }
+    let image = validate_image_view(image, PixelFormat::Gray8)?;
 
-    if image.width == 0 || image.height == 0 {
-        return Err(ImageError::InvalidData {
-            reason: "width and height must be greater than zero",
-        });
-    }
-
-    let image = ImageView::new(
-        image.width,
-        image.height,
-        image.pixel_format,
-        image.stride,
-        image.data,
-    )?;
-
-    writeln!(writer, "P2")?;
-    writeln!(writer, "{} {}", image.width, image.height)?;
-    writeln!(writer, "{MAX_VALUE}")?;
+    write_sample_header(writer, "P2", image)?;
 
     let row_len = image.width as usize * PixelFormat::Gray8.bytes_per_pixel();
 
@@ -177,6 +87,8 @@ pub fn encode_ascii<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+
+    use crate::ImageError;
 
     use super::*;
 
