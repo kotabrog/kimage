@@ -6,22 +6,49 @@
 
 最初から PNG や JPEG の完全対応を目指すのではなく、単純な形式から段階的に実装し、画像IOに必要な内部設計を理解しながら育てる。
 
-## 最初の到達点
+## 現在の状態
 
-まずは次の範囲を MVP とする。
+初期のクレート構成と、基本的な画像表現は実装済み。
 
-- `Image` / `ImageView` / `PixelFormat` などの共通画像型を用意する
-- endian 読み書きなどの小さな binary IO helper を用意する
-- PPM P6 の読み込みと保存に対応する
-- 必要に応じて PGM P5、BMP へ広げる
+- `Image`
+- `ImageView`
+- `PixelFormat`
+- `ImageError`
+- endian 読み書き helper
 
-初期のピクセル形式は `Rgb8` を中心にし、必要になってから `Gray8` や `Rgba8` を追加する。
+現在対応している形式:
+
+- PPM P6
+  - `Rgb8`
+  - `maxval = 255`
+- PGM P5
+  - `Gray8`
+  - `maxval = 255`
+- BMP
+  - 24-bit uncompressed bottom-up
+  - `BITMAPINFOHEADER`
+
+各形式には roundtrip example があり、`target/examples/` に画像ファイルを書き出して確認できる。
+
+## 次の目標
+
+次は Netpbm 系フォーマットの基本対応を揃える。
+
+初回リリース前の目標:
+
+- PPM P6 / P3
+- PGM P5 / P2
+- PBM P4 / P1
+
+初回リリースでは `u8` ベースの基本対応を優先する。
+
+16-bit samples、`maxval > 255`、複数画像 stream、PAM は後回しにする。
 
 ## 設計方針
 
 画像データは `Vec<u8>` 単体では扱わず、幅、高さ、ピクセル形式を合わせて保持する。
 
-想定する中心型は次のようなもの。
+中心型は次の通り。
 
 ```rust
 pub struct Image {
@@ -46,11 +73,13 @@ pub enum PixelFormat {
 }
 ```
 
-読み込みでは所有する `Image` を返し、保存では利用者の既存バッファを借りられるように `ImageView` を受け取る設計を基本にする。
+読み込みでは所有する `Image` を返し、保存では利用者の既存バッファを借りられるように `ImageView` を受け取る。
 
-## モジュール構成の案
+PBM は初回リリースでは `Gray8` に展開する方針とし、`Bitmap1` のような 1bit 専用表現は後回しにする。
 
-初期構成は次のように小さく始める。
+## モジュール構成
+
+現在の構成:
 
 ```text
 src/
@@ -61,45 +90,26 @@ src/
     codecs/
         mod.rs
         ppm.rs
+        pgm.rs
         bmp.rs
 ```
 
-PNG 対応へ進む段階で、必要に応じて次を追加する。
+次に追加する候補:
 
 ```text
 src/
-    checksum.rs
-    bitstream.rs
-    zlib.rs
-    deflate.rs
     codecs/
-        png/
-            mod.rs
-            chunk.rs
-            filter.rs
-            encoder.rs
-            decoder.rs
+        netpbm.rs
+        pbm.rs
 ```
 
-## 実装順序
-
-推奨する順序は次の通り。
-
-1. 共通画像型とエラー型を定義する
-2. binary IO helper を実装する
-3. PPM P6 encoder / decoder を実装する
-4. PGM P5 に対応して `Gray8` を追加する
-5. BMP encoder / decoder を実装する
-6. PNG の前準備として CRC32 と Adler-32 を実装する
-7. PNG encoder の最小版を実装する
-8. PNG decoder の最小版を実装する
-
-PNG の最小版では、最初は filter type 0 と deflate stored block のみを扱う方針でよい。
+`netpbm.rs` には、PPM / PGM / PBM で共通するヘッダ parser や ASCII token parser を置く想定。
 
 ## 後回しにするもの
 
-初期段階では次の対応は行わない。
+初回リリースまでは次の対応は行わない。
 
+- PNG
 - JPEG
 - TIFF
 - AVIF
@@ -108,5 +118,9 @@ PNG の最小版では、最初は filter type 0 と deflate stored block のみ
 - rayon による並列化
 - bytemuck 的な高速 cast
 - 本格的な deflate 圧縮
+- 16-bit samples
+- `maxval > 255`
+- Netpbm の複数画像 stream
+- PAM
 
-これらは PPM/BMP と共通画像型が固まった後に検討する。
+これらは Netpbm 基本対応と初回リリース後に検討する。
