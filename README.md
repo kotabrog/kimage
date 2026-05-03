@@ -16,11 +16,13 @@ Supported:
 - binary PGM P5 with `Gray8` and `maxval = 255`
 - ASCII PPM P3 with `Rgb8` and `maxval = 255`
 - ASCII PGM P2 with `Gray8` and `maxval = 255`
+- binary PBM P4 expanded to `Gray8`
+- ASCII PBM P1 expanded to `Gray8`
 
 Unsupported:
 
 - 16-bit PPM/PGM samples
-- PBM
+- `maxval` values other than 255 for PPM/PGM
 
 ### BMP
 
@@ -75,6 +77,24 @@ cargo run --example pgm_ascii_roundtrip
 ```
 
 The example writes `target/examples/pgm_ascii_roundtrip.pgm`.
+
+### PBM
+
+Run the binary PBM P4 roundtrip example to write and read back a small black-and-white checker image:
+
+```sh
+cargo run --example pbm_roundtrip
+```
+
+The example writes `target/examples/pbm_roundtrip.pbm`.
+
+Run the ASCII PBM P1 roundtrip example:
+
+```sh
+cargo run --example pbm_ascii_roundtrip
+```
+
+The example writes `target/examples/pbm_ascii_roundtrip.pbm`.
 
 ### BMP
 
