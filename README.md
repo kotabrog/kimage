@@ -14,10 +14,11 @@ Supported:
 
 - binary PPM P6 with `Rgb8` and `maxval = 255`
 - binary PGM P5 with `Gray8` and `maxval = 255`
+- ASCII PPM P3 with `Rgb8` and `maxval = 255`
+- ASCII PGM P2 with `Gray8` and `maxval = 255`
 
 Unsupported:
 
-- ASCII Netpbm formats such as PPM P3 and PGM P2
 - 16-bit PPM/PGM samples
 - PBM
 

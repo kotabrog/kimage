@@ -42,6 +42,25 @@ impl<'a> HeaderParser<'a> {
             .map_err(|_| ImageError::InvalidHeader { reason: name })
     }
 
+    pub(crate) fn next_u8_sample(&mut self, max_value: u32) -> Result<u8> {
+        let sample = self.next_u32("sample")?;
+
+        if sample > max_value {
+            return Err(ImageError::InvalidData {
+                reason: "sample value exceeds max value",
+            });
+        }
+
+        u8::try_from(sample).map_err(|_| ImageError::InvalidData {
+            reason: "sample value is larger than u8",
+        })
+    }
+
+    pub(crate) fn has_more_tokens(&mut self) -> bool {
+        self.skip_whitespace_and_comments();
+        self.position < self.data.len()
+    }
+
     pub(crate) fn consume_raster_separator(&mut self) -> Result<()> {
         if self.position >= self.data.len() || !is_whitespace(self.data[self.position]) {
             return Err(ImageError::InvalidHeader {
@@ -107,6 +126,33 @@ mod tests {
         let error = parser.next_u32("width").unwrap_err();
 
         assert_eq!(error, ImageError::InvalidHeader { reason: "width" });
+    }
+
+    #[test]
+    fn next_u8_sample_parses_sample_within_max_value() {
+        let mut parser = HeaderParser::new(b"128");
+
+        assert_eq!(parser.next_u8_sample(255).unwrap(), 128);
+    }
+
+    #[test]
+    fn next_u8_sample_rejects_sample_above_max_value() {
+        let mut parser = HeaderParser::new(b"256");
+        let error = parser.next_u8_sample(255).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "sample value exceeds max value"
+            }
+        );
+    }
+
+    #[test]
+    fn has_more_tokens_skips_comments_before_checking() {
+        let mut parser = HeaderParser::new(b"  # comment\n");
+
+        assert!(!parser.has_more_tokens());
     }
 
     #[test]
