@@ -8,16 +8,16 @@ The first goal is to define a minimal crate structure and then grow support from
 
 The current implementations intentionally cover only small, early subsets of each format.
 
-### PPM / PGM
+### PBM / PGM / PPM
 
 Supported:
 
-- binary PPM P6 with `Rgb8` and `maxval = 255`
-- binary PGM P5 with `Gray8` and `maxval = 255`
-- ASCII PPM P3 with `Rgb8` and `maxval = 255`
-- ASCII PGM P2 with `Gray8` and `maxval = 255`
-- binary PBM P4 expanded to `Gray8`
 - ASCII PBM P1 expanded to `Gray8`
+- ASCII PGM P2 with `Gray8` and `maxval = 255`
+- ASCII PPM P3 with `Rgb8` and `maxval = 255`
+- binary PBM P4 expanded to `Gray8`
+- binary PGM P5 with `Gray8` and `maxval = 255`
+- binary PPM P6 with `Rgb8` and `maxval = 255`
 
 Unsupported:
 
@@ -42,33 +42,25 @@ Unsupported:
 
 ## Examples
 
-### PPM
+### PBM
 
-Run the binary PPM P6 roundtrip example to write and read back a small RGB gradient image:
-
-```sh
-cargo run --example ppm_roundtrip
-```
-
-The example writes `target/examples/ppm_roundtrip.ppm`.
-
-Run the ASCII PPM P3 roundtrip example:
+Run the ASCII PBM P1 roundtrip example to write and read back a small black-and-white checker image:
 
 ```sh
-cargo run --example ppm_ascii_roundtrip
+cargo run --example pbm_ascii_roundtrip
 ```
 
-The example writes `target/examples/ppm_ascii_roundtrip.ppm`.
+The example writes `target/examples/pbm_ascii_roundtrip.pbm`.
+
+Run the binary PBM P4 roundtrip example:
+
+```sh
+cargo run --example pbm_roundtrip
+```
+
+The example writes `target/examples/pbm_roundtrip.pbm`.
 
 ### PGM
-
-Run the binary PGM P5 roundtrip example to write and read back a small grayscale gradient image:
-
-```sh
-cargo run --example pgm_roundtrip
-```
-
-The example writes `target/examples/pgm_roundtrip.pgm`.
 
 Run the ASCII PGM P2 roundtrip example:
 
@@ -78,23 +70,31 @@ cargo run --example pgm_ascii_roundtrip
 
 The example writes `target/examples/pgm_ascii_roundtrip.pgm`.
 
-### PBM
-
-Run the binary PBM P4 roundtrip example to write and read back a small black-and-white checker image:
+Run the binary PGM P5 roundtrip example to write and read back a small grayscale gradient image:
 
 ```sh
-cargo run --example pbm_roundtrip
+cargo run --example pgm_roundtrip
 ```
 
-The example writes `target/examples/pbm_roundtrip.pbm`.
+The example writes `target/examples/pgm_roundtrip.pgm`.
 
-Run the ASCII PBM P1 roundtrip example:
+### PPM
+
+Run the ASCII PPM P3 roundtrip example:
 
 ```sh
-cargo run --example pbm_ascii_roundtrip
+cargo run --example ppm_ascii_roundtrip
 ```
 
-The example writes `target/examples/pbm_ascii_roundtrip.pbm`.
+The example writes `target/examples/ppm_ascii_roundtrip.ppm`.
+
+Run the binary PPM P6 roundtrip example to write and read back a small RGB gradient image:
+
+```sh
+cargo run --example ppm_roundtrip
+```
+
+The example writes `target/examples/ppm_roundtrip.ppm`.
 
 ### BMP
 
