@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 
+use crate::codecs::netpbm::HeaderParser;
 use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
 const MAGIC: &[u8] = b"P6";
@@ -82,88 +83,6 @@ pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
     }
 
     Ok(())
-}
-
-struct HeaderParser<'a> {
-    data: &'a [u8],
-    position: usize,
-}
-
-impl<'a> HeaderParser<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, position: 0 }
-    }
-
-    fn position(&self) -> usize {
-        self.position
-    }
-
-    fn next_token(&mut self) -> Result<&'a [u8]> {
-        self.skip_whitespace_and_comments();
-
-        if self.position >= self.data.len() {
-            return Err(ImageError::InvalidHeader {
-                reason: "unexpected end of header",
-            });
-        }
-
-        let start = self.position;
-
-        while self.position < self.data.len() && !is_whitespace(self.data[self.position]) {
-            self.position += 1;
-        }
-
-        Ok(&self.data[start..self.position])
-    }
-
-    fn next_u32(&mut self, name: &'static str) -> Result<u32> {
-        let token = self.next_token()?;
-        let text = std::str::from_utf8(token).map_err(|_| ImageError::InvalidHeader {
-            reason: "header contains non-UTF-8 token",
-        })?;
-
-        text.parse::<u32>()
-            .map_err(|_| ImageError::InvalidHeader { reason: name })
-    }
-
-    fn consume_raster_separator(&mut self) -> Result<()> {
-        if self.position >= self.data.len() || !is_whitespace(self.data[self.position]) {
-            return Err(ImageError::InvalidHeader {
-                reason: "missing raster separator",
-            });
-        }
-
-        if self.data[self.position] == b'\r'
-            && self.position + 1 < self.data.len()
-            && self.data[self.position + 1] == b'\n'
-        {
-            self.position += 2;
-            return Ok(());
-        }
-
-        self.position += 1;
-        Ok(())
-    }
-
-    fn skip_whitespace_and_comments(&mut self) {
-        loop {
-            while self.position < self.data.len() && is_whitespace(self.data[self.position]) {
-                self.position += 1;
-            }
-
-            if self.position >= self.data.len() || self.data[self.position] != b'#' {
-                break;
-            }
-
-            while self.position < self.data.len() && self.data[self.position] != b'\n' {
-                self.position += 1;
-            }
-        }
-    }
-}
-
-fn is_whitespace(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
 }
 
 #[cfg(test)]
