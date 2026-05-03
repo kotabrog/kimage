@@ -14,10 +14,11 @@ Supported:
 
 - binary PPM P6 with `Rgb8` and `maxval = 255`
 - binary PGM P5 with `Gray8` and `maxval = 255`
+- ASCII PPM P3 with `Rgb8` and `maxval = 255`
+- ASCII PGM P2 with `Gray8` and `maxval = 255`
 
 Unsupported:
 
-- ASCII Netpbm formats such as PPM P3 and PGM P2
 - 16-bit PPM/PGM samples
 - PBM
 
@@ -41,7 +42,7 @@ Unsupported:
 
 ### PPM
 
-Run the PPM roundtrip example to write and read back a small RGB gradient image:
+Run the binary PPM P6 roundtrip example to write and read back a small RGB gradient image:
 
 ```sh
 cargo run --example ppm_roundtrip
@@ -49,15 +50,31 @@ cargo run --example ppm_roundtrip
 
 The example writes `target/examples/ppm_roundtrip.ppm`.
 
+Run the ASCII PPM P3 roundtrip example:
+
+```sh
+cargo run --example ppm_ascii_roundtrip
+```
+
+The example writes `target/examples/ppm_ascii_roundtrip.ppm`.
+
 ### PGM
 
-Run the PGM roundtrip example to write and read back a small grayscale gradient image:
+Run the binary PGM P5 roundtrip example to write and read back a small grayscale gradient image:
 
 ```sh
 cargo run --example pgm_roundtrip
 ```
 
 The example writes `target/examples/pgm_roundtrip.pgm`.
+
+Run the ASCII PGM P2 roundtrip example:
+
+```sh
+cargo run --example pgm_ascii_roundtrip
+```
+
+The example writes `target/examples/pgm_ascii_roundtrip.pgm`.
 
 ### BMP
 
