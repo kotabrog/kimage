@@ -1,9 +1,9 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, NetpbmImage, normalize_sample_to_u8, raster_slice, read_any_sample_header,
-    read_ascii_samples_with_max_value, validate_image_view, write_packed_rows, write_sample_header,
-    write_sample_header_with_max_value,
+    HeaderParser, NetpbmImage, normalize_sample_to_u8, normalize_sample_to_u16, raster_slice,
+    read_any_sample_header, read_ascii_sample_bytes_with_max_value, validate_image_view,
+    write_packed_rows, write_sample_header_with_max_value,
 };
 use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
@@ -12,7 +12,7 @@ const ASCII_MAGIC: &[u8] = b"P2";
 
 /// Decodes a binary PGM P5 image.
 ///
-/// This implementation normalizes 8-bit PGM samples to `PixelFormat::Gray8`.
+/// This implementation normalizes PGM samples to `PixelFormat::Gray8` or `PixelFormat::Gray16`.
 pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
     pgm_native_to_image(decode_native(reader)?)
 }
@@ -24,22 +24,26 @@ pub fn decode_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
 
     let mut parser = HeaderParser::new(&data);
     let (dimensions, maxval) = read_any_sample_header(&mut parser, MAGIC)?;
-    reject_unsupported_native_maxval(maxval)?;
-
     parser.consume_raster_separator()?;
-    let raster = raster_slice(&data, &parser, dimensions, PixelFormat::Gray8)?;
+    let pixel_format = pgm_pixel_format_for_maxval(maxval);
+    let raster = raster_slice(&data, &parser, dimensions, pixel_format)?;
+    let data = if maxval < 256 {
+        raster.to_vec()
+    } else {
+        be_samples_to_le_bytes(raster)
+    };
 
     Ok(NetpbmImage::Pgm {
         width: dimensions.width,
         height: dimensions.height,
         maxval,
-        data: raster.to_vec(),
+        data,
     })
 }
 
 /// Decodes an ASCII PGM P2 image.
 ///
-/// This implementation normalizes 8-bit PGM samples to `PixelFormat::Gray8`.
+/// This implementation normalizes PGM samples to `PixelFormat::Gray8` or `PixelFormat::Gray16`.
 pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
     pgm_native_to_image(decode_ascii_native(reader)?)
 }
@@ -51,12 +55,9 @@ pub fn decode_ascii_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
 
     let mut parser = HeaderParser::new(&data);
     let (dimensions, maxval) = read_any_sample_header(&mut parser, ASCII_MAGIC)?;
-    reject_unsupported_native_maxval(maxval)?;
-
-    let expected = dimensions.width as usize
-        * dimensions.height as usize
-        * PixelFormat::Gray8.bytes_per_pixel();
-    let pixels = read_ascii_samples_with_max_value(&mut parser, expected, maxval as u32)?;
+    let expected =
+        dimensions.width as usize * dimensions.height as usize * PixelFormat::Gray8.channels();
+    let pixels = read_ascii_sample_bytes_with_max_value(&mut parser, expected, maxval)?;
 
     Ok(NetpbmImage::Pgm {
         width: dimensions.width,
@@ -68,30 +69,43 @@ pub fn decode_ascii_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
 
 /// Encodes an image view as binary PGM P5.
 ///
-/// This initial implementation supports only `PixelFormat::Gray8`.
+/// This implementation supports `PixelFormat::Gray8` and `PixelFormat::Gray16`.
 pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
-    let image = validate_image_view(image, PixelFormat::Gray8)?;
+    let maxval = image_maxval(image.pixel_format, PixelFormat::Gray8, PixelFormat::Gray16)?;
+    let image = validate_image_view(image, image.pixel_format)?;
 
-    write_sample_header(writer, "P5", image)?;
-    write_packed_rows(writer, image)
+    write_sample_header_with_max_value(writer, "P5", image.width, image.height, maxval)?;
+
+    if image.pixel_format == PixelFormat::Gray8 {
+        write_packed_rows(writer, image)
+    } else {
+        write_16_bit_rows_as_be(writer, image)
+    }
 }
 
 /// Encodes an image view as ASCII PGM P2.
 ///
-/// This initial implementation supports only `PixelFormat::Gray8`.
+/// This implementation supports `PixelFormat::Gray8` and `PixelFormat::Gray16`.
 pub fn encode_ascii<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
-    let image = validate_image_view(image, PixelFormat::Gray8)?;
+    let maxval = image_maxval(image.pixel_format, PixelFormat::Gray8, PixelFormat::Gray16)?;
+    let image = validate_image_view(image, image.pixel_format)?;
 
-    write_sample_header(writer, "P2", image)?;
+    write_sample_header_with_max_value(writer, "P2", image.width, image.height, maxval)?;
 
-    let row_len = image.width as usize * PixelFormat::Gray8.bytes_per_pixel();
+    let row_len = image.width as usize * image.pixel_format.bytes_per_pixel();
 
     for row in 0..image.height as usize {
         let start = row * image.stride;
         let end = start + row_len;
 
-        for sample in &image.data[start..end] {
-            writeln!(writer, "{sample}")?;
+        if image.pixel_format == PixelFormat::Gray8 {
+            for sample in &image.data[start..end] {
+                writeln!(writer, "{sample}")?;
+            }
+        } else {
+            for sample in image.data[start..end].chunks_exact(2) {
+                writeln!(writer, "{}", u16::from_le_bytes([sample[0], sample[1]]))?;
+            }
         }
     }
 
@@ -103,7 +117,11 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
     let (width, height, maxval, data) = validate_native_pgm_image(image)?;
 
     write_sample_header_with_max_value(writer, "P5", width, height, maxval)?;
-    writer.write_all(data)?;
+    if maxval < 256 {
+        writer.write_all(data)?;
+    } else {
+        write_le_sample_bytes_as_be(writer, data)?;
+    }
 
     Ok(())
 }
@@ -114,8 +132,14 @@ pub fn encode_ascii_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Res
 
     write_sample_header_with_max_value(writer, "P2", width, height, maxval)?;
 
-    for sample in data {
-        writeln!(writer, "{sample}")?;
+    if maxval < 256 {
+        for sample in data {
+            writeln!(writer, "{sample}")?;
+        }
+    } else {
+        for sample in data.chunks_exact(2) {
+            writeln!(writer, "{}", u16::from_le_bytes([sample[0], sample[1]]))?;
+        }
     }
 
     Ok(())
@@ -136,12 +160,22 @@ fn pgm_native_to_image(image: NetpbmImage) -> Result<Image> {
         return Image::new(width, height, PixelFormat::Gray8, data);
     }
 
-    let data = data
-        .into_iter()
-        .map(|sample| normalize_sample_to_u8(sample, maxval))
-        .collect();
+    if maxval < 256 {
+        let data = data
+            .into_iter()
+            .map(|sample| normalize_sample_to_u8(sample, maxval))
+            .collect();
 
-    Image::new(width, height, PixelFormat::Gray8, data)
+        return Image::new(width, height, PixelFormat::Gray8, data);
+    }
+
+    let mut normalized = Vec::with_capacity(data.len());
+    for sample in data.chunks_exact(2) {
+        let sample = u16::from_le_bytes([sample[0], sample[1]]);
+        normalized.extend_from_slice(&normalize_sample_to_u16(sample, maxval).to_le_bytes());
+    }
+
+    Image::new(width, height, PixelFormat::Gray16, normalized)
 }
 
 fn validate_native_pgm_image(image: &NetpbmImage) -> Result<(u32, u32, u16, &[u8])> {
@@ -155,7 +189,13 @@ fn validate_native_pgm_image(image: &NetpbmImage) -> Result<(u32, u32, u16, &[u8
         return Err(ImageError::UnsupportedFormat);
     };
 
-    validate_native_sample_image(*width, *height, *maxval, data, PixelFormat::Gray8)?;
+    validate_native_sample_image(
+        *width,
+        *height,
+        *maxval,
+        data,
+        PixelFormat::Gray8.channels(),
+    )?;
     Ok((*width, *height, *maxval, data))
 }
 
@@ -163,12 +203,6 @@ fn reject_unsupported_native_maxval(maxval: u16) -> Result<()> {
     if maxval == 0 {
         return Err(ImageError::InvalidHeader {
             reason: "max value must be between 1 and 65535",
-        });
-    }
-
-    if maxval > 255 {
-        return Err(ImageError::InvalidHeader {
-            reason: "only max value 255 is supported",
         });
     }
 
@@ -180,7 +214,7 @@ fn validate_native_sample_image(
     height: u32,
     maxval: u16,
     data: &[u8],
-    pixel_format: PixelFormat,
+    channels: usize,
 ) -> Result<()> {
     reject_unsupported_native_maxval(maxval)?;
 
@@ -192,11 +226,12 @@ fn validate_native_sample_image(
 
     let expected = (width as usize)
         .checked_mul(height as usize)
-        .and_then(|pixels| pixels.checked_mul(pixel_format.bytes_per_pixel()))
+        .and_then(|pixels| pixels.checked_mul(channels))
+        .and_then(|samples| samples.checked_mul(bytes_per_sample(maxval)))
         .ok_or(ImageError::ImageDimensionsTooLarge {
             width,
             height,
-            bytes_per_pixel: pixel_format.bytes_per_pixel(),
+            bytes_per_pixel: channels * bytes_per_sample(maxval),
         })?;
 
     if data.len() != expected {
@@ -206,10 +241,74 @@ fn validate_native_sample_image(
         });
     }
 
-    if data.iter().any(|sample| *sample as u16 > maxval) {
+    if maxval < 256 && data.iter().any(|sample| *sample as u16 > maxval) {
         return Err(ImageError::InvalidData {
             reason: "sample value exceeds max value",
         });
+    }
+
+    if maxval >= 256
+        && data
+            .chunks_exact(2)
+            .any(|sample| u16::from_le_bytes([sample[0], sample[1]]) > maxval)
+    {
+        return Err(ImageError::InvalidData {
+            reason: "sample value exceeds max value",
+        });
+    }
+
+    Ok(())
+}
+
+fn pgm_pixel_format_for_maxval(maxval: u16) -> PixelFormat {
+    if maxval < 256 {
+        PixelFormat::Gray8
+    } else {
+        PixelFormat::Gray16
+    }
+}
+
+fn bytes_per_sample(maxval: u16) -> usize {
+    if maxval < 256 { 1 } else { 2 }
+}
+
+fn image_maxval(
+    actual: PixelFormat,
+    eight_bit: PixelFormat,
+    sixteen_bit: PixelFormat,
+) -> Result<u16> {
+    match actual {
+        format if format == eight_bit => Ok(u16::from(u8::MAX)),
+        format if format == sixteen_bit => Ok(u16::MAX),
+        pixel_format => Err(ImageError::UnsupportedPixelFormat { pixel_format }),
+    }
+}
+
+fn be_samples_to_le_bytes(data: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(data.len());
+
+    for sample in data.chunks_exact(2) {
+        output.extend_from_slice(&u16::from_be_bytes([sample[0], sample[1]]).to_le_bytes());
+    }
+
+    output
+}
+
+fn write_le_sample_bytes_as_be<W: Write>(writer: &mut W, data: &[u8]) -> Result<()> {
+    for sample in data.chunks_exact(2) {
+        writer.write_all(&u16::from_le_bytes([sample[0], sample[1]]).to_be_bytes())?;
+    }
+
+    Ok(())
+}
+
+fn write_16_bit_rows_as_be<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
+    let row_len = image.width as usize * image.pixel_format.bytes_per_pixel();
+
+    for row in 0..image.height as usize {
+        let start = row * image.stride;
+        let end = start + row_len;
+        write_le_sample_bytes_as_be(writer, &image.data[start..end])?;
     }
 
     Ok(())
@@ -248,6 +347,33 @@ mod tests {
                 data: vec![0, 15]
             }
         );
+    }
+
+    #[test]
+    fn decode_native_reads_pgm_p5_16_bit_samples_as_little_endian() {
+        let input = b"P5\n2 1\n65535\n\x12\x34\xff\xff";
+        let image = decode_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            image,
+            NetpbmImage::Pgm {
+                width: 2,
+                height: 1,
+                maxval: 65535,
+                data: vec![0x34, 0x12, 0xff, 0xff]
+            }
+        );
+    }
+
+    #[test]
+    fn decode_reads_pgm_p5_16_bit_as_gray16_image() {
+        let input = b"P5\n2 1\n65535\n\x12\x34\xff\xff";
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 1);
+        assert_eq!(image.pixel_format, PixelFormat::Gray16);
+        assert_eq!(image.data, [0x34, 0x12, 0xff, 0xff]);
     }
 
     #[test]
@@ -311,14 +437,15 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_unsupported_max_value() {
+    fn decode_rejects_short_16_bit_raster_data() {
         let input = b"P5\n1 1\n65535\n\0";
         let error = decode(&mut Cursor::new(input)).unwrap_err();
 
         assert_eq!(
             error,
-            ImageError::InvalidHeader {
-                reason: "only max value 255 is supported"
+            ImageError::InvalidBufferLength {
+                expected: 2,
+                actual: 1
             }
         );
     }
@@ -361,6 +488,32 @@ mod tests {
         encode_native(&mut output, &image).unwrap();
 
         assert_eq!(output, b"P5\n2 1\n15\n\0\x0f");
+    }
+
+    #[test]
+    fn encode_native_writes_pgm_p5_16_bit_samples_as_big_endian() {
+        let image = NetpbmImage::Pgm {
+            width: 2,
+            height: 1,
+            maxval: 65535,
+            data: vec![0x34, 0x12, 0xff, 0xff],
+        };
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(output, b"P5\n2 1\n65535\n\x12\x34\xff\xff");
+    }
+
+    #[test]
+    fn encode_writes_pgm_p5_gray16_image_as_big_endian() {
+        let data = [0x34, 0x12, 0xff, 0xff];
+        let image = ImageView::new(2, 1, PixelFormat::Gray16, 4, &data).unwrap();
+        let mut output = Vec::new();
+
+        encode(&mut output, image).unwrap();
+
+        assert_eq!(output, b"P5\n2 1\n65535\n\x12\x34\xff\xff");
     }
 
     #[test]
@@ -435,6 +588,22 @@ mod tests {
     }
 
     #[test]
+    fn decode_ascii_native_reads_pgm_p2_16_bit_samples_as_little_endian() {
+        let input = b"P2\n2 1\n65535\n4660 65535\n";
+        let image = decode_ascii_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            image,
+            NetpbmImage::Pgm {
+                width: 2,
+                height: 1,
+                maxval: 65535,
+                data: vec![0x34, 0x12, 0xff, 0xff]
+            }
+        );
+    }
+
+    #[test]
     fn decode_ascii_normalizes_pgm_p2_max_value_to_gray8() {
         let input = b"P2\n4 1\n15\n0 5 10 15\n";
         let image = decode_ascii(&mut Cursor::new(input)).unwrap();
@@ -443,6 +612,17 @@ mod tests {
         assert_eq!(image.height, 1);
         assert_eq!(image.pixel_format, PixelFormat::Gray8);
         assert_eq!(image.data, [0, 85, 170, 255]);
+    }
+
+    #[test]
+    fn decode_ascii_reads_pgm_p2_16_bit_as_gray16_image() {
+        let input = b"P2\n2 1\n65535\n4660 65535\n";
+        let image = decode_ascii(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 1);
+        assert_eq!(image.pixel_format, PixelFormat::Gray16);
+        assert_eq!(image.data, [0x34, 0x12, 0xff, 0xff]);
     }
 
     #[test]
@@ -526,6 +706,32 @@ mod tests {
         encode_ascii_native(&mut output, &image).unwrap();
 
         assert_eq!(output, b"P2\n2 1\n15\n0\n15\n");
+    }
+
+    #[test]
+    fn encode_ascii_native_writes_pgm_p2_16_bit_samples() {
+        let image = NetpbmImage::Pgm {
+            width: 2,
+            height: 1,
+            maxval: 65535,
+            data: vec![0x34, 0x12, 0xff, 0xff],
+        };
+        let mut output = Vec::new();
+
+        encode_ascii_native(&mut output, &image).unwrap();
+
+        assert_eq!(output, b"P2\n2 1\n65535\n4660\n65535\n");
+    }
+
+    #[test]
+    fn encode_ascii_writes_pgm_p2_gray16_image() {
+        let data = [0x34, 0x12, 0xff, 0xff];
+        let image = ImageView::new(2, 1, PixelFormat::Gray16, 4, &data).unwrap();
+        let mut output = Vec::new();
+
+        encode_ascii(&mut output, image).unwrap();
+
+        assert_eq!(output, b"P2\n2 1\n65535\n4660\n65535\n");
     }
 
     #[test]

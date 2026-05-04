@@ -13,16 +13,19 @@ The current implementations intentionally cover only small, early subsets of eac
 Supported:
 
 - ASCII PBM P1 expanded to `Gray8`
-- ASCII PGM P2 with `Gray8` and `maxval = 255`
-- ASCII PPM P3 with `Rgb8` and `maxval = 255`
+- ASCII PGM P2 with `maxval = 1..=65535`
+- ASCII PPM P3 with `maxval = 1..=65535`
 - binary PBM P4 expanded to `Gray8`
-- binary PGM P5 with `Gray8` and `maxval = 255`
-- binary PPM P6 with `Rgb8` and `maxval = 255`
+- binary PGM P5 with `maxval = 1..=65535`
+- binary PPM P6 with `maxval = 1..=65535`
+- PGM/PPM samples normalized to `Gray8` / `Rgb8` for `maxval < 256`
+- PGM/PPM samples normalized to `Gray16` / `Rgb16` for `maxval >= 256`
+- native PGM/PPM APIs that preserve `maxval` and sample values
 
 Unsupported:
 
-- 16-bit PPM/PGM samples
-- `maxval` values other than 255 for PPM/PGM
+- multi-image Netpbm streams
+- PAM P7
 
 ### BMP
 
@@ -78,6 +81,14 @@ cargo run --example pgm_roundtrip
 
 The example writes `target/examples/pgm_roundtrip.pgm`.
 
+Run the 16-bit binary PGM P5 roundtrip example with `maxval = 65535`:
+
+```sh
+cargo run --example pgm16_roundtrip
+```
+
+The example writes `target/examples/pgm16_roundtrip.pgm`.
+
 ### PPM
 
 Run the ASCII PPM P3 roundtrip example:
@@ -95,6 +106,14 @@ cargo run --example ppm_roundtrip
 ```
 
 The example writes `target/examples/ppm_roundtrip.ppm`.
+
+Run the 16-bit binary PPM P6 roundtrip example with `maxval = 65535`:
+
+```sh
+cargo run --example ppm16_roundtrip
+```
+
+The example writes `target/examples/ppm16_roundtrip.ppm`.
 
 ### BMP
 
