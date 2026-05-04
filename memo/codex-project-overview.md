@@ -41,7 +41,7 @@
 対象:
 
 - parser の仕様追従
-- PGM / PPM の `maxval` 1..65535
+- PGM / PPM の `maxval` 1..=65535
 - PGM / PPM の 16-bit sample
 - Netpbm の `maxval` を保持する native image 型
 - native image から汎用 `Image` への正規化変換
@@ -162,7 +162,7 @@ src/
 - コメントは `#` から次の CR または LF の直前まで。
 - PBM P4 は1bit/pixelで、各行は8bit単位に詰める。余ったbitは don't care。
 - PBM は `0 = white`, `1 = black`。
-- PGM / PPM の `maxval` は 1..65535。
+- PGM / PPM の `maxval` は 1..=65535。
 - PGM / PPM の binary sample は、`maxval < 256` なら1 byte、`maxval >= 256` なら2 bytes big-endian。
 - `NetpbmImage` では PGM / PPM sample値を正規化せず保持する。`maxval >= 256` のsampleは内部 little-endian の `u16` として持つ。
 - 汎用 `Image` へ変換する場合のみ、target bit depth のfull rangeへ正規化する。
