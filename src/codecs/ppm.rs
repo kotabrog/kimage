@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, NetpbmImage, raster_slice, read_any_sample_header,
+    HeaderParser, NetpbmImage, normalize_sample_to_u8, raster_slice, read_any_sample_header,
     read_ascii_samples_with_max_value, validate_image_view, write_packed_rows, write_sample_header,
     write_sample_header_with_max_value,
 };
@@ -12,7 +12,7 @@ const ASCII_MAGIC: &[u8] = b"P3";
 
 /// Decodes a binary PPM P6 image.
 ///
-/// This initial implementation supports only 8-bit RGB images with max value 255.
+/// This implementation normalizes 8-bit PPM samples to `PixelFormat::Rgb8`.
 pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
     ppm_native_to_image(decode_native(reader)?)
 }
@@ -39,7 +39,7 @@ pub fn decode_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
 
 /// Decodes an ASCII PPM P3 image.
 ///
-/// This initial implementation supports only 8-bit RGB images with max value 255.
+/// This implementation normalizes 8-bit PPM samples to `PixelFormat::Rgb8`.
 pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
     ppm_native_to_image(decode_ascii_native(reader)?)
 }
@@ -133,11 +133,14 @@ fn ppm_native_to_image(image: NetpbmImage) -> Result<Image> {
         return Err(ImageError::UnsupportedFormat);
     };
 
-    if maxval != 255 {
-        return Err(ImageError::InvalidHeader {
-            reason: "only max value 255 is supported",
-        });
+    if maxval == u16::from(u8::MAX) {
+        return Image::new(width, height, PixelFormat::Rgb8, data);
     }
+
+    let data = data
+        .into_iter()
+        .map(|sample| normalize_sample_to_u8(sample, maxval))
+        .collect();
 
     Image::new(width, height, PixelFormat::Rgb8, data)
 }
@@ -246,6 +249,25 @@ mod tests {
                 data: vec![15, 0, 0, 0, 15, 0]
             }
         );
+    }
+
+    #[test]
+    fn decode_normalizes_ppm_p6_max_value_to_rgb8() {
+        let input = b"P6\n2 1\n15\n\x0f\0\x05\0\x0a\x0f";
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 1);
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 85, 0, 170, 255]);
+    }
+
+    #[test]
+    fn decode_normalizes_ppm_p6_max_value_with_nearest_rounding() {
+        let input = b"P6\n1 1\n10\n\x05\0\x0a";
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.data, [128, 0, 255]);
     }
 
     #[test]
@@ -411,6 +433,17 @@ mod tests {
                 data: vec![15, 0, 0, 0, 15, 0]
             }
         );
+    }
+
+    #[test]
+    fn decode_ascii_normalizes_ppm_p3_max_value_to_rgb8() {
+        let input = b"P3\n2 1\n15\n15 0 5\n0 10 15\n";
+        let image = decode_ascii(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 1);
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 85, 0, 170, 255]);
     }
 
     #[test]

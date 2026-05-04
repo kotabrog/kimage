@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, NetpbmImage, raster_slice, read_any_sample_header,
+    HeaderParser, NetpbmImage, normalize_sample_to_u8, raster_slice, read_any_sample_header,
     read_ascii_samples_with_max_value, validate_image_view, write_packed_rows, write_sample_header,
     write_sample_header_with_max_value,
 };
@@ -12,7 +12,7 @@ const ASCII_MAGIC: &[u8] = b"P2";
 
 /// Decodes a binary PGM P5 image.
 ///
-/// This initial implementation supports only 8-bit grayscale images with max value 255.
+/// This implementation normalizes 8-bit PGM samples to `PixelFormat::Gray8`.
 pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
     pgm_native_to_image(decode_native(reader)?)
 }
@@ -39,7 +39,7 @@ pub fn decode_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
 
 /// Decodes an ASCII PGM P2 image.
 ///
-/// This initial implementation supports only 8-bit grayscale images with max value 255.
+/// This implementation normalizes 8-bit PGM samples to `PixelFormat::Gray8`.
 pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
     pgm_native_to_image(decode_ascii_native(reader)?)
 }
@@ -132,11 +132,14 @@ fn pgm_native_to_image(image: NetpbmImage) -> Result<Image> {
         return Err(ImageError::UnsupportedFormat);
     };
 
-    if maxval != 255 {
-        return Err(ImageError::InvalidHeader {
-            reason: "only max value 255 is supported",
-        });
+    if maxval == u16::from(u8::MAX) {
+        return Image::new(width, height, PixelFormat::Gray8, data);
     }
+
+    let data = data
+        .into_iter()
+        .map(|sample| normalize_sample_to_u8(sample, maxval))
+        .collect();
 
     Image::new(width, height, PixelFormat::Gray8, data)
 }
@@ -245,6 +248,25 @@ mod tests {
                 data: vec![0, 15]
             }
         );
+    }
+
+    #[test]
+    fn decode_normalizes_pgm_p5_max_value_to_gray8() {
+        let input = b"P5\n4 1\n15\n\x00\x05\x0a\x0f";
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.width, 4);
+        assert_eq!(image.height, 1);
+        assert_eq!(image.pixel_format, PixelFormat::Gray8);
+        assert_eq!(image.data, [0, 85, 170, 255]);
+    }
+
+    #[test]
+    fn decode_normalizes_pgm_p5_max_value_with_nearest_rounding() {
+        let input = b"P5\n1 1\n10\n\x05";
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.data, [128]);
     }
 
     #[test]
@@ -410,6 +432,17 @@ mod tests {
                 data: vec![0, 15]
             }
         );
+    }
+
+    #[test]
+    fn decode_ascii_normalizes_pgm_p2_max_value_to_gray8() {
+        let input = b"P2\n4 1\n15\n0 5 10 15\n";
+        let image = decode_ascii(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.width, 4);
+        assert_eq!(image.height, 1);
+        assert_eq!(image.pixel_format, PixelFormat::Gray8);
+        assert_eq!(image.data, [0, 85, 170, 255]);
     }
 
     #[test]
