@@ -1,8 +1,8 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, read_ascii_samples, read_sample_header, validate_image_view, write_packed_rows,
-    write_sample_header,
+    HeaderParser, raster_slice, read_ascii_samples, read_sample_header, validate_image_view,
+    write_packed_rows, write_sample_header,
 };
 use crate::{Image, ImageView, PixelFormat, Result};
 
@@ -20,12 +20,13 @@ pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
     let dimensions = read_sample_header(&mut parser, MAGIC)?;
 
     parser.consume_raster_separator()?;
+    let raster = raster_slice(&data, &parser, dimensions, PixelFormat::Gray8)?;
 
     Image::new(
         dimensions.width,
         dimensions.height,
         PixelFormat::Gray8,
-        data[parser.position()..].to_vec(),
+        raster.to_vec(),
     )
 }
 

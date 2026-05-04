@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, read_bitmap_header, reject_trailing_tokens, validate_image_view,
+    Dimensions, HeaderParser, read_bitmap_header, reject_trailing_tokens, validate_image_view,
     write_bitmap_header,
 };
 use crate::{Image, ImageError, ImageView, PixelFormat, Result};
@@ -52,32 +52,9 @@ pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
     let dimensions = read_bitmap_header(&mut parser, BINARY_MAGIC)?;
     parser.consume_raster_separator()?;
 
-    let row_bytes = pbm_row_bytes(dimensions.width)?;
-    let expected_raster_len = row_bytes.checked_mul(dimensions.height as usize).ok_or(
-        ImageError::ImageDimensionsTooLarge {
-            width: dimensions.width,
-            height: dimensions.height,
-            bytes_per_pixel: PixelFormat::Gray8.bytes_per_pixel(),
-        },
-    )?;
-    let raster_start = parser.position();
-    let raster_end = raster_start.checked_add(expected_raster_len).ok_or(
-        ImageError::ImageDimensionsTooLarge {
-            width: dimensions.width,
-            height: dimensions.height,
-            bytes_per_pixel: PixelFormat::Gray8.bytes_per_pixel(),
-        },
-    )?;
-
-    if raster_end > data.len() {
-        return Err(ImageError::InvalidBufferLength {
-            expected: raster_end,
-            actual: data.len(),
-        });
-    }
-
+    let row_bytes = pbm_row_bytes(dimensions)?;
+    let raster = pbm_raster_slice(&data, &parser, dimensions, row_bytes)?;
     let mut pixels = Vec::with_capacity(dimensions.width as usize * dimensions.height as usize);
-    let raster = &data[raster_start..raster_end];
 
     for row in 0..dimensions.height as usize {
         let row_start = row * row_bytes;
@@ -136,7 +113,10 @@ pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
     write_bitmap_header(writer, "P4", image)?;
 
     let row_len = image.width as usize;
-    let row_bytes = pbm_row_bytes(image.width)?;
+    let row_bytes = pbm_row_bytes(Dimensions {
+        width: image.width,
+        height: image.height,
+    })?;
 
     for row in 0..image.height as usize {
         let start = row * image.stride;
@@ -163,15 +143,48 @@ pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
     Ok(())
 }
 
-fn pbm_row_bytes(width: u32) -> Result<usize> {
-    (width as usize)
+fn pbm_row_bytes(dimensions: Dimensions) -> Result<usize> {
+    (dimensions.width as usize)
         .checked_add(7)
         .map(|width| width / 8)
         .ok_or(ImageError::ImageDimensionsTooLarge {
-            width,
-            height: 1,
+            width: dimensions.width,
+            height: dimensions.height,
             bytes_per_pixel: PixelFormat::Gray8.bytes_per_pixel(),
         })
+}
+
+fn pbm_raster_slice<'a>(
+    data: &'a [u8],
+    parser: &HeaderParser<'_>,
+    dimensions: Dimensions,
+    row_bytes: usize,
+) -> Result<&'a [u8]> {
+    let raster_start = parser.position();
+    let raster_len = row_bytes.checked_mul(dimensions.height as usize).ok_or(
+        ImageError::ImageDimensionsTooLarge {
+            width: dimensions.width,
+            height: dimensions.height,
+            bytes_per_pixel: PixelFormat::Gray8.bytes_per_pixel(),
+        },
+    )?;
+    let raster_end =
+        raster_start
+            .checked_add(raster_len)
+            .ok_or(ImageError::ImageDimensionsTooLarge {
+                width: dimensions.width,
+                height: dimensions.height,
+                bytes_per_pixel: PixelFormat::Gray8.bytes_per_pixel(),
+            })?;
+
+    if raster_end > data.len() {
+        return Err(ImageError::InvalidBufferLength {
+            expected: raster_len,
+            actual: data.len().saturating_sub(raster_start),
+        });
+    }
+
+    Ok(&data[raster_start..raster_end])
 }
 
 fn pbm_sample_to_gray8(sample: u32) -> Result<u8> {
@@ -303,8 +316,8 @@ mod tests {
         assert_eq!(
             error,
             ImageError::InvalidBufferLength {
-                expected: 9,
-                actual: 8
+                expected: 2,
+                actual: 1
             }
         );
     }
