@@ -3,6 +3,7 @@ use std::io::Write;
 use crate::{ImageError, ImageView, PixelFormat, Result};
 
 pub(crate) const MAX_VALUE: u32 = 255;
+pub(crate) const MAX_SUPPORTED_VALUE: u32 = 65_535;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Dimensions {
@@ -66,6 +67,18 @@ impl<'a> HeaderParser<'a> {
         })
     }
 
+    pub(crate) fn next_max_value(&mut self) -> Result<u32> {
+        let max_value = self.next_u32("max value")?;
+
+        if !(1..=MAX_SUPPORTED_VALUE).contains(&max_value) {
+            return Err(ImageError::InvalidHeader {
+                reason: "max value must be between 1 and 65535",
+            });
+        }
+
+        Ok(max_value)
+    }
+
     pub(crate) fn has_more_tokens(&mut self) -> bool {
         self.skip_whitespace_and_comments();
         self.position < self.data.len()
@@ -100,7 +113,10 @@ impl<'a> HeaderParser<'a> {
                 break;
             }
 
-            while self.position < self.data.len() && self.data[self.position] != b'\n' {
+            while self.position < self.data.len()
+                && self.data[self.position] != b'\r'
+                && self.data[self.position] != b'\n'
+            {
                 self.position += 1;
             }
         }
@@ -131,7 +147,7 @@ pub(crate) fn read_sample_header(
     expected_magic: &[u8],
 ) -> Result<Dimensions> {
     let dimensions = read_bitmap_header(parser, expected_magic)?;
-    let max_value = parser.next_u32("max value")?;
+    let max_value = parser.next_max_value()?;
 
     if max_value != MAX_VALUE {
         return Err(ImageError::InvalidHeader {
@@ -192,6 +208,55 @@ pub(crate) fn reject_trailing_tokens(parser: &mut HeaderParser<'_>) -> Result<()
     Ok(())
 }
 
+pub(crate) fn packed_raster_len(
+    dimensions: Dimensions,
+    pixel_format: PixelFormat,
+) -> Result<usize> {
+    let row_len = dimensions
+        .width
+        .checked_mul(pixel_format.bytes_per_pixel() as u32)
+        .ok_or(ImageError::ImageDimensionsTooLarge {
+            width: dimensions.width,
+            height: dimensions.height,
+            bytes_per_pixel: pixel_format.bytes_per_pixel(),
+        })? as usize;
+
+    row_len
+        .checked_mul(dimensions.height as usize)
+        .ok_or(ImageError::ImageDimensionsTooLarge {
+            width: dimensions.width,
+            height: dimensions.height,
+            bytes_per_pixel: pixel_format.bytes_per_pixel(),
+        })
+}
+
+pub(crate) fn raster_slice<'a>(
+    data: &'a [u8],
+    parser: &HeaderParser<'_>,
+    dimensions: Dimensions,
+    pixel_format: PixelFormat,
+) -> Result<&'a [u8]> {
+    let raster_start = parser.position();
+    let raster_len = packed_raster_len(dimensions, pixel_format)?;
+    let raster_end =
+        raster_start
+            .checked_add(raster_len)
+            .ok_or(ImageError::ImageDimensionsTooLarge {
+                width: dimensions.width,
+                height: dimensions.height,
+                bytes_per_pixel: pixel_format.bytes_per_pixel(),
+            })?;
+
+    if raster_end > data.len() {
+        return Err(ImageError::InvalidBufferLength {
+            expected: raster_len,
+            actual: data.len().saturating_sub(raster_start),
+        });
+    }
+
+    Ok(&data[raster_start..raster_end])
+}
+
 pub(crate) fn write_sample_header<W: Write>(
     writer: &mut W,
     magic: &str,
@@ -238,7 +303,7 @@ fn validate_dimensions(dimensions: Dimensions) -> Result<()> {
 }
 
 fn is_whitespace(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\n' | b'\r')
+    matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
 }
 
 #[cfg(test)]
@@ -251,6 +316,21 @@ mod tests {
 
         assert_eq!(parser.next_token().unwrap(), b"P6");
         assert_eq!(parser.next_token().unwrap(), b"2");
+    }
+
+    #[test]
+    fn next_token_treats_vertical_tab_and_form_feed_as_whitespace() {
+        let mut parser = HeaderParser::new(b"\x0bP5\x0c2");
+
+        assert_eq!(parser.next_token().unwrap(), b"P5");
+        assert_eq!(parser.next_token().unwrap(), b"2");
+    }
+
+    #[test]
+    fn next_token_ends_comment_at_carriage_return() {
+        let mut parser = HeaderParser::new(b"# comment\rP6");
+
+        assert_eq!(parser.next_token().unwrap(), b"P6");
     }
 
     #[test]
@@ -284,6 +364,39 @@ mod tests {
             error,
             ImageError::InvalidData {
                 reason: "sample value exceeds max value"
+            }
+        );
+    }
+
+    #[test]
+    fn next_max_value_accepts_spec_range() {
+        let mut parser = HeaderParser::new(b"65535");
+
+        assert_eq!(parser.next_max_value().unwrap(), 65_535);
+    }
+
+    #[test]
+    fn next_max_value_rejects_zero() {
+        let mut parser = HeaderParser::new(b"0");
+        let error = parser.next_max_value().unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "max value must be between 1 and 65535"
+            }
+        );
+    }
+
+    #[test]
+    fn next_max_value_rejects_value_above_spec_range() {
+        let mut parser = HeaderParser::new(b"65536");
+        let error = parser.next_max_value().unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "max value must be between 1 and 65535"
             }
         );
     }
@@ -361,6 +474,19 @@ mod tests {
     }
 
     #[test]
+    fn read_sample_header_rejects_zero_max_value() {
+        let mut parser = HeaderParser::new(b"P6\n1 1\n0\n");
+        let error = read_sample_header(&mut parser, b"P6").unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "max value must be between 1 and 65535"
+            }
+        );
+    }
+
+    #[test]
     fn validate_image_view_accepts_matching_format() {
         let data = [1, 2, 3, 4, 5, 6];
         let image = ImageView::new(2, 1, PixelFormat::Rgb8, 6, &data).unwrap();
@@ -433,5 +559,48 @@ mod tests {
         write_packed_rows(&mut output, image).unwrap();
 
         assert_eq!(output, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn packed_raster_len_returns_required_byte_count() {
+        let dimensions = Dimensions {
+            width: 2,
+            height: 3,
+        };
+
+        assert_eq!(
+            packed_raster_len(dimensions, PixelFormat::Rgb8).unwrap(),
+            18
+        );
+    }
+
+    #[test]
+    fn raster_slice_returns_only_current_image_raster() {
+        let data = b"P5\n2 1\n255\n\x10\x20P5\n1 1\n255\n\x30";
+        let mut parser = HeaderParser::new(data);
+        let dimensions = read_sample_header(&mut parser, b"P5").unwrap();
+        parser.consume_raster_separator().unwrap();
+
+        assert_eq!(
+            raster_slice(data, &parser, dimensions, PixelFormat::Gray8).unwrap(),
+            b"\x10\x20"
+        );
+    }
+
+    #[test]
+    fn raster_slice_rejects_short_raster() {
+        let data = b"P5\n2 1\n255\n\x10";
+        let mut parser = HeaderParser::new(data);
+        let dimensions = read_sample_header(&mut parser, b"P5").unwrap();
+        parser.consume_raster_separator().unwrap();
+        let error = raster_slice(data, &parser, dimensions, PixelFormat::Gray8).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidBufferLength {
+                expected: 2,
+                actual: 1
+            }
+        );
     }
 }
