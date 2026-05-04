@@ -2,7 +2,6 @@ use std::io::Write;
 
 use crate::{ImageError, ImageView, PixelFormat, Result};
 
-pub(crate) const MAX_VALUE: u32 = 255;
 pub(crate) const MAX_SUPPORTED_VALUE: u32 = 65_535;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,6 +84,20 @@ impl<'a> HeaderParser<'a> {
 
         u8::try_from(sample).map_err(|_| ImageError::InvalidData {
             reason: "sample value is larger than u8",
+        })
+    }
+
+    pub(crate) fn next_u16_sample(&mut self, max_value: u32) -> Result<u16> {
+        let sample = self.next_u32("sample")?;
+
+        if sample > max_value {
+            return Err(ImageError::InvalidData {
+                reason: "sample value exceeds max value",
+            });
+        }
+
+        u16::try_from(sample).map_err(|_| ImageError::InvalidData {
+            reason: "sample value is larger than u16",
         })
     }
 
@@ -214,6 +227,26 @@ pub(crate) fn read_ascii_samples_with_max_value(
     Ok(pixels)
 }
 
+pub(crate) fn read_ascii_sample_bytes_with_max_value(
+    parser: &mut HeaderParser<'_>,
+    expected_samples: usize,
+    max_value: u16,
+) -> Result<Vec<u8>> {
+    if max_value < 256 {
+        return read_ascii_samples_with_max_value(parser, expected_samples, u32::from(max_value));
+    }
+
+    let mut pixels = Vec::with_capacity(expected_samples * 2);
+
+    for _ in 0..expected_samples {
+        pixels.extend_from_slice(&parser.next_u16_sample(u32::from(max_value))?.to_le_bytes());
+    }
+
+    reject_trailing_tokens(parser)?;
+
+    Ok(pixels)
+}
+
 pub(crate) fn reject_trailing_tokens(parser: &mut HeaderParser<'_>) -> Result<()> {
     if parser.has_more_tokens() {
         return Err(ImageError::InvalidData {
@@ -273,14 +306,6 @@ pub(crate) fn raster_slice<'a>(
     Ok(&data[raster_start..raster_end])
 }
 
-pub(crate) fn write_sample_header<W: Write>(
-    writer: &mut W,
-    magic: &str,
-    image: ImageView<'_>,
-) -> Result<()> {
-    write_sample_header_with_max_value(writer, magic, image.width, image.height, MAX_VALUE as u16)
-}
-
 pub(crate) fn write_sample_header_with_max_value<W: Write>(
     writer: &mut W,
     magic: &str,
@@ -300,6 +325,13 @@ pub(crate) fn normalize_sample_to_u8(sample: u8, maxval: u16) -> u8 {
     let maxval = u32::from(maxval);
 
     ((sample * u32::from(u8::MAX) + maxval / 2) / maxval) as u8
+}
+
+pub(crate) fn normalize_sample_to_u16(sample: u16, maxval: u16) -> u16 {
+    let sample = u32::from(sample);
+    let maxval = u32::from(maxval);
+
+    ((sample * u32::from(u16::MAX) + maxval / 2) / maxval) as u16
 }
 
 pub(crate) fn write_bitmap_header<W: Write>(
@@ -561,7 +593,7 @@ mod tests {
         let mut parser = HeaderParser::new(b"1 2 3");
 
         assert_eq!(
-            read_ascii_samples_with_max_value(&mut parser, 3, MAX_VALUE).unwrap(),
+            read_ascii_samples_with_max_value(&mut parser, 3, 255).unwrap(),
             [1, 2, 3]
         );
     }
@@ -577,17 +609,6 @@ mod tests {
                 reason: "too many samples"
             }
         );
-    }
-
-    #[test]
-    fn write_sample_header_writes_magic_dimensions_and_max_value() {
-        let data = [1];
-        let image = ImageView::new(1, 1, PixelFormat::Gray8, 1, &data).unwrap();
-        let mut output = Vec::new();
-
-        write_sample_header(&mut output, "P5", image).unwrap();
-
-        assert_eq!(output, b"P5\n1 1\n255\n");
     }
 
     #[test]

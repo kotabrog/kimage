@@ -4,7 +4,9 @@ use crate::{ImageError, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
     Gray8,
+    Gray16,
     Rgb8,
+    Rgb16,
     Rgba8,
 }
 
@@ -13,14 +15,22 @@ impl PixelFormat {
     pub const fn channels(self) -> usize {
         match self {
             Self::Gray8 => 1,
+            Self::Gray16 => 1,
             Self::Rgb8 => 3,
+            Self::Rgb16 => 3,
             Self::Rgba8 => 4,
         }
     }
 
     /// Returns the number of bytes used by one pixel in this pixel format.
     pub const fn bytes_per_pixel(self) -> usize {
-        self.channels()
+        match self {
+            Self::Gray8 => 1,
+            Self::Gray16 => 2,
+            Self::Rgb8 => 3,
+            Self::Rgb16 => 6,
+            Self::Rgba8 => 4,
+        }
     }
 }
 
@@ -157,14 +167,18 @@ mod tests {
     #[test]
     fn pixel_format_channels_returns_channel_count() {
         assert_eq!(PixelFormat::Gray8.channels(), 1);
+        assert_eq!(PixelFormat::Gray16.channels(), 1);
         assert_eq!(PixelFormat::Rgb8.channels(), 3);
+        assert_eq!(PixelFormat::Rgb16.channels(), 3);
         assert_eq!(PixelFormat::Rgba8.channels(), 4);
     }
 
     #[test]
     fn pixel_format_bytes_per_pixel_returns_byte_count() {
         assert_eq!(PixelFormat::Gray8.bytes_per_pixel(), 1);
+        assert_eq!(PixelFormat::Gray16.bytes_per_pixel(), 2);
         assert_eq!(PixelFormat::Rgb8.bytes_per_pixel(), 3);
+        assert_eq!(PixelFormat::Rgb16.bytes_per_pixel(), 6);
         assert_eq!(PixelFormat::Rgba8.bytes_per_pixel(), 4);
     }
 
