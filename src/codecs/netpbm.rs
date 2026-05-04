@@ -295,6 +295,13 @@ pub(crate) fn write_sample_header_with_max_value<W: Write>(
     Ok(())
 }
 
+pub(crate) fn normalize_sample_to_u8(sample: u8, maxval: u16) -> u8 {
+    let sample = u32::from(sample);
+    let maxval = u32::from(maxval);
+
+    ((sample * u32::from(u8::MAX) + maxval / 2) / maxval) as u8
+}
+
 pub(crate) fn write_bitmap_header<W: Write>(
     writer: &mut W,
     magic: &str,
@@ -581,6 +588,28 @@ mod tests {
         write_sample_header(&mut output, "P5", image).unwrap();
 
         assert_eq!(output, b"P5\n1 1\n255\n");
+    }
+
+    #[test]
+    fn write_sample_header_with_max_value_writes_custom_max_value() {
+        let mut output = Vec::new();
+
+        write_sample_header_with_max_value(&mut output, "P2", 2, 1, 15).unwrap();
+
+        assert_eq!(output, b"P2\n2 1\n15\n");
+    }
+
+    #[test]
+    fn normalize_sample_to_u8_scales_to_full_range() {
+        assert_eq!(normalize_sample_to_u8(0, 15), 0);
+        assert_eq!(normalize_sample_to_u8(5, 15), 85);
+        assert_eq!(normalize_sample_to_u8(10, 15), 170);
+        assert_eq!(normalize_sample_to_u8(15, 15), 255);
+    }
+
+    #[test]
+    fn normalize_sample_to_u8_rounds_to_nearest() {
+        assert_eq!(normalize_sample_to_u8(5, 10), 128);
     }
 
     #[test]
