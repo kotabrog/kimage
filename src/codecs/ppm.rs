@@ -1,10 +1,11 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, raster_slice, read_ascii_samples, read_sample_header, validate_image_view,
-    write_packed_rows, write_sample_header,
+    HeaderParser, NetpbmImage, raster_slice, read_any_sample_header,
+    read_ascii_samples_with_max_value, validate_image_view, write_packed_rows, write_sample_header,
+    write_sample_header_with_max_value,
 };
-use crate::{Image, ImageView, PixelFormat, Result};
+use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
 const MAGIC: &[u8] = b"P6";
 const ASCII_MAGIC: &[u8] = b"P3";
@@ -13,44 +14,56 @@ const ASCII_MAGIC: &[u8] = b"P3";
 ///
 /// This initial implementation supports only 8-bit RGB images with max value 255.
 pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
+    ppm_native_to_image(decode_native(reader)?)
+}
+
+/// Decodes a binary PPM P6 image while preserving its max value.
+pub fn decode_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
 
     let mut parser = HeaderParser::new(&data);
-    let dimensions = read_sample_header(&mut parser, MAGIC)?;
+    let (dimensions, maxval) = read_any_sample_header(&mut parser, MAGIC)?;
+    reject_unsupported_native_maxval(maxval)?;
 
     parser.consume_raster_separator()?;
     let raster = raster_slice(&data, &parser, dimensions, PixelFormat::Rgb8)?;
 
-    Image::new(
-        dimensions.width,
-        dimensions.height,
-        PixelFormat::Rgb8,
-        raster.to_vec(),
-    )
+    Ok(NetpbmImage::Ppm {
+        width: dimensions.width,
+        height: dimensions.height,
+        maxval,
+        data: raster.to_vec(),
+    })
 }
 
 /// Decodes an ASCII PPM P3 image.
 ///
 /// This initial implementation supports only 8-bit RGB images with max value 255.
 pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
+    ppm_native_to_image(decode_ascii_native(reader)?)
+}
+
+/// Decodes an ASCII PPM P3 image while preserving its max value.
+pub fn decode_ascii_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
 
     let mut parser = HeaderParser::new(&data);
-    let dimensions = read_sample_header(&mut parser, ASCII_MAGIC)?;
+    let (dimensions, maxval) = read_any_sample_header(&mut parser, ASCII_MAGIC)?;
+    reject_unsupported_native_maxval(maxval)?;
 
     let expected = dimensions.width as usize
         * dimensions.height as usize
         * PixelFormat::Rgb8.bytes_per_pixel();
-    let pixels = read_ascii_samples(&mut parser, expected)?;
+    let pixels = read_ascii_samples_with_max_value(&mut parser, expected, maxval as u32)?;
 
-    Image::new(
-        dimensions.width,
-        dimensions.height,
-        PixelFormat::Rgb8,
-        pixels,
-    )
+    Ok(NetpbmImage::Ppm {
+        width: dimensions.width,
+        height: dimensions.height,
+        maxval,
+        data: pixels,
+    })
 }
 
 /// Encodes an image view as binary PPM P6.
@@ -86,6 +99,120 @@ pub fn encode_ascii<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()
     Ok(())
 }
 
+/// Encodes a native PPM image as binary PPM P6.
+pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()> {
+    let (width, height, maxval, data) = validate_native_ppm_image(image)?;
+
+    write_sample_header_with_max_value(writer, "P6", width, height, maxval)?;
+    writer.write_all(data)?;
+
+    Ok(())
+}
+
+/// Encodes a native PPM image as ASCII PPM P3.
+pub fn encode_ascii_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()> {
+    let (width, height, maxval, data) = validate_native_ppm_image(image)?;
+
+    write_sample_header_with_max_value(writer, "P3", width, height, maxval)?;
+
+    for pixel in data.chunks_exact(3) {
+        writeln!(writer, "{} {} {}", pixel[0], pixel[1], pixel[2])?;
+    }
+
+    Ok(())
+}
+
+fn ppm_native_to_image(image: NetpbmImage) -> Result<Image> {
+    let NetpbmImage::Ppm {
+        width,
+        height,
+        maxval,
+        data,
+    } = image
+    else {
+        return Err(ImageError::UnsupportedFormat);
+    };
+
+    if maxval != 255 {
+        return Err(ImageError::InvalidHeader {
+            reason: "only max value 255 is supported",
+        });
+    }
+
+    Image::new(width, height, PixelFormat::Rgb8, data)
+}
+
+fn validate_native_ppm_image(image: &NetpbmImage) -> Result<(u32, u32, u16, &[u8])> {
+    let NetpbmImage::Ppm {
+        width,
+        height,
+        maxval,
+        data,
+    } = image
+    else {
+        return Err(ImageError::UnsupportedFormat);
+    };
+
+    validate_native_sample_image(*width, *height, *maxval, data, PixelFormat::Rgb8)?;
+    Ok((*width, *height, *maxval, data))
+}
+
+fn reject_unsupported_native_maxval(maxval: u16) -> Result<()> {
+    if maxval == 0 {
+        return Err(ImageError::InvalidHeader {
+            reason: "max value must be between 1 and 65535",
+        });
+    }
+
+    if maxval > 255 {
+        return Err(ImageError::InvalidHeader {
+            reason: "only max value 255 is supported",
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_native_sample_image(
+    width: u32,
+    height: u32,
+    maxval: u16,
+    data: &[u8],
+    pixel_format: PixelFormat,
+) -> Result<()> {
+    reject_unsupported_native_maxval(maxval)?;
+
+    if width == 0 || height == 0 {
+        return Err(ImageError::InvalidData {
+            reason: "width and height must be greater than zero",
+        });
+    }
+
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(pixel_format.bytes_per_pixel()))
+        .ok_or(ImageError::ImageDimensionsTooLarge {
+            width,
+            height,
+            bytes_per_pixel: pixel_format.bytes_per_pixel(),
+        })?;
+
+    if data.len() != expected {
+        return Err(ImageError::InvalidBufferLength {
+            expected,
+            actual: data.len(),
+        });
+    }
+
+    if data.iter().any(|sample| *sample as u16 > maxval) {
+        return Err(ImageError::InvalidData {
+            reason: "sample value exceeds max value",
+        });
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -103,6 +230,22 @@ mod tests {
         assert_eq!(image.height, 2);
         assert_eq!(image.pixel_format, PixelFormat::Rgb8);
         assert_eq!(image.data, [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn decode_native_reads_ppm_p6_with_max_value() {
+        let input = b"P6\n2 1\n15\n\x0f\0\0\0\x0f\0";
+        let image = decode_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            image,
+            NetpbmImage::Ppm {
+                width: 2,
+                height: 1,
+                maxval: 15,
+                data: vec![15, 0, 0, 0, 15, 0]
+            }
+        );
     }
 
     #[test]
@@ -185,6 +328,21 @@ mod tests {
     }
 
     #[test]
+    fn encode_native_writes_ppm_p6_with_max_value() {
+        let image = NetpbmImage::Ppm {
+            width: 2,
+            height: 1,
+            maxval: 15,
+            data: vec![15, 0, 0, 0, 15, 0],
+        };
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(output, b"P6\n2 1\n15\n\x0f\0\0\0\x0f\0");
+    }
+
+    #[test]
     fn encode_writes_only_pixel_bytes_from_strided_rows() {
         let data = [255, 0, 0, 99, 0, 255, 0, 88];
         let image = ImageView::new(1, 2, PixelFormat::Rgb8, 4, &data).unwrap();
@@ -237,6 +395,22 @@ mod tests {
         assert_eq!(image.height, 1);
         assert_eq!(image.pixel_format, PixelFormat::Rgb8);
         assert_eq!(image.data, [255, 0, 0, 0, 255, 0]);
+    }
+
+    #[test]
+    fn decode_ascii_native_reads_ppm_p3_with_max_value() {
+        let input = b"P3\n2 1\n15\n15 0 0\n0 15 0\n";
+        let image = decode_ascii_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            image,
+            NetpbmImage::Ppm {
+                width: 2,
+                height: 1,
+                maxval: 15,
+                data: vec![15, 0, 0, 0, 15, 0]
+            }
+        );
     }
 
     #[test]
@@ -305,6 +479,21 @@ mod tests {
         encode_ascii(&mut output, image).unwrap();
 
         assert_eq!(output, b"P3\n2 1\n255\n255 0 0\n0 255 0\n");
+    }
+
+    #[test]
+    fn encode_ascii_native_writes_ppm_p3_with_max_value() {
+        let image = NetpbmImage::Ppm {
+            width: 2,
+            height: 1,
+            maxval: 15,
+            data: vec![15, 0, 0, 0, 15, 0],
+        };
+        let mut output = Vec::new();
+
+        encode_ascii_native(&mut output, &image).unwrap();
+
+        assert_eq!(output, b"P3\n2 1\n15\n15 0 0\n0 15 0\n");
     }
 
     #[test]

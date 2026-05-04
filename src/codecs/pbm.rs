@@ -1,8 +1,8 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    Dimensions, HeaderParser, read_bitmap_header, reject_trailing_tokens, validate_image_view,
-    write_bitmap_header,
+    Dimensions, HeaderParser, NetpbmImage, read_bitmap_header, reject_trailing_tokens,
+    validate_image_view, write_bitmap_header, write_bitmap_header_dimensions,
 };
 use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
@@ -16,6 +16,11 @@ const BLACK: u8 = 0;
 /// PBM samples are expanded to `PixelFormat::Gray8`, where `0` is black and
 /// `255` is white.
 pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
+    pbm_native_to_image(decode_ascii_native(reader)?)
+}
+
+/// Decodes an ASCII PBM P1 image without normalizing PBM sample values.
+pub fn decode_ascii_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
 
@@ -27,17 +32,16 @@ pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
 
     for _ in 0..expected {
         let sample = parser.next_u32("bitmap sample")?;
-        pixels.push(pbm_sample_to_gray8(sample)?);
+        pixels.push(validate_pbm_sample(sample)?);
     }
 
     reject_trailing_tokens(&mut parser)?;
 
-    Image::new(
-        dimensions.width,
-        dimensions.height,
-        PixelFormat::Gray8,
-        pixels,
-    )
+    Ok(NetpbmImage::Pbm {
+        width: dimensions.width,
+        height: dimensions.height,
+        data: pixels,
+    })
 }
 
 /// Decodes a binary PBM P4 image.
@@ -45,6 +49,11 @@ pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
 /// PBM bits are expanded to `PixelFormat::Gray8`, where `0` is black and `255`
 /// is white.
 pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
+    pbm_native_to_image(decode_native(reader)?)
+}
+
+/// Decodes a binary PBM P4 image without normalizing PBM bit values.
+pub fn decode_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
 
@@ -63,16 +72,15 @@ pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
         for x in 0..dimensions.width as usize {
             let byte = row_data[x / 8];
             let bit = (byte >> (7 - (x % 8))) & 1;
-            pixels.push(pbm_bit_to_gray8(bit));
+            pixels.push(bit);
         }
     }
 
-    Image::new(
-        dimensions.width,
-        dimensions.height,
-        PixelFormat::Gray8,
-        pixels,
-    )
+    Ok(NetpbmImage::Pbm {
+        width: dimensions.width,
+        height: dimensions.height,
+        data: pixels,
+    })
 }
 
 /// Encodes an image view as ASCII PBM P1.
@@ -95,6 +103,29 @@ pub fn encode_ascii<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()
                 write!(writer, " ")?;
             }
             write!(writer, "{}", gray8_to_pbm_sample(*sample))?;
+        }
+
+        writeln!(writer)?;
+    }
+
+    Ok(())
+}
+
+/// Encodes a native PBM image as ASCII PBM P1.
+pub fn encode_ascii_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()> {
+    let (width, height, data) = validate_native_pbm_image(image)?;
+
+    write_bitmap_header_dimensions(writer, "P1", width, height)?;
+
+    for row in 0..height as usize {
+        let start = row * width as usize;
+        let end = start + width as usize;
+
+        for (index, sample) in data[start..end].iter().enumerate() {
+            if index > 0 {
+                write!(writer, " ")?;
+            }
+            write!(writer, "{sample}")?;
         }
 
         writeln!(writer)?;
@@ -134,6 +165,38 @@ pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
 
                 let bit = gray8_to_pbm_sample(row_data[x]) as u8;
                 packed |= bit << (7 - bit_index);
+            }
+
+            writer.write_all(&[packed])?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Encodes a native PBM image as binary PBM P4.
+pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()> {
+    let (width, height, data) = validate_native_pbm_image(image)?;
+
+    write_bitmap_header_dimensions(writer, "P4", width, height)?;
+
+    let row_len = width as usize;
+    let row_bytes = pbm_row_bytes(Dimensions { width, height })?;
+
+    for row in 0..height as usize {
+        let start = row * row_len;
+        let row_data = &data[start..start + row_len];
+
+        for byte_index in 0..row_bytes {
+            let mut packed = 0;
+
+            for bit_index in 0..8 {
+                let x = byte_index * 8 + bit_index;
+                if x >= row_len {
+                    break;
+                }
+
+                packed |= row_data[x] << (7 - bit_index);
             }
 
             writer.write_all(&[packed])?;
@@ -187,22 +250,76 @@ fn pbm_raster_slice<'a>(
     Ok(&data[raster_start..raster_end])
 }
 
-fn pbm_sample_to_gray8(sample: u32) -> Result<u8> {
+fn validate_pbm_sample(sample: u32) -> Result<u8> {
     match sample {
-        0 => Ok(WHITE),
-        1 => Ok(BLACK),
+        0 => Ok(0),
+        1 => Ok(1),
         _ => Err(ImageError::InvalidData {
             reason: "invalid PBM sample",
         }),
     }
 }
 
-fn pbm_bit_to_gray8(bit: u8) -> u8 {
-    if bit == 0 { WHITE } else { BLACK }
+fn pbm_sample_to_gray8(sample: u8) -> u8 {
+    if sample == 0 { WHITE } else { BLACK }
 }
 
 fn gray8_to_pbm_sample(sample: u8) -> u32 {
     if sample < 128 { 1 } else { 0 }
+}
+
+fn pbm_native_to_image(image: NetpbmImage) -> Result<Image> {
+    let NetpbmImage::Pbm {
+        width,
+        height,
+        data,
+    } = image
+    else {
+        return Err(ImageError::UnsupportedFormat);
+    };
+
+    let pixels = data.into_iter().map(pbm_sample_to_gray8).collect();
+    Image::new(width, height, PixelFormat::Gray8, pixels)
+}
+
+fn validate_native_pbm_image(image: &NetpbmImage) -> Result<(u32, u32, &[u8])> {
+    let NetpbmImage::Pbm {
+        width,
+        height,
+        data,
+    } = image
+    else {
+        return Err(ImageError::UnsupportedFormat);
+    };
+
+    if *width == 0 || *height == 0 {
+        return Err(ImageError::InvalidData {
+            reason: "width and height must be greater than zero",
+        });
+    }
+
+    let expected = (*width as usize).checked_mul(*height as usize).ok_or(
+        ImageError::ImageDimensionsTooLarge {
+            width: *width,
+            height: *height,
+            bytes_per_pixel: PixelFormat::Gray8.bytes_per_pixel(),
+        },
+    )?;
+
+    if data.len() != expected {
+        return Err(ImageError::InvalidBufferLength {
+            expected,
+            actual: data.len(),
+        });
+    }
+
+    if data.iter().any(|sample| *sample > 1) {
+        return Err(ImageError::InvalidData {
+            reason: "invalid PBM sample",
+        });
+    }
+
+    Ok((*width, *height, data))
 }
 
 #[cfg(test)]
@@ -220,6 +337,21 @@ mod tests {
         assert_eq!(image.height, 2);
         assert_eq!(image.pixel_format, PixelFormat::Gray8);
         assert_eq!(image.data, [255, 0, 255, 0, 255, 0]);
+    }
+
+    #[test]
+    fn decode_ascii_native_reads_pbm_p1_samples() {
+        let input = b"P1\n3 1\n0 1 0\n";
+        let image = decode_ascii_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            image,
+            NetpbmImage::Pbm {
+                width: 3,
+                height: 1,
+                data: vec![0, 1, 0]
+            }
+        );
     }
 
     #[test]
@@ -291,6 +423,21 @@ mod tests {
     }
 
     #[test]
+    fn decode_native_reads_pbm_p4_bits() {
+        let input = b"P4\n3 2\n\x40\xa0";
+        let image = decode_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            image,
+            NetpbmImage::Pbm {
+                width: 3,
+                height: 2,
+                data: vec![0, 1, 0, 1, 0, 1]
+            }
+        );
+    }
+
+    #[test]
     fn decode_accepts_crlf_raster_separator() {
         let input = b"P4\r\n1 1\r\n\x80";
         let image = decode(&mut Cursor::new(input)).unwrap();
@@ -334,6 +481,20 @@ mod tests {
     }
 
     #[test]
+    fn encode_ascii_native_writes_pbm_p1_samples() {
+        let image = NetpbmImage::Pbm {
+            width: 4,
+            height: 1,
+            data: vec![0, 1, 0, 1],
+        };
+        let mut output = Vec::new();
+
+        encode_ascii_native(&mut output, &image).unwrap();
+
+        assert_eq!(output, b"P1\n4 1\n0 1 0 1\n");
+    }
+
+    #[test]
     fn encode_ascii_writes_only_pixel_bytes_from_strided_rows() {
         let data = [255, 99, 0, 88];
         let image = ImageView::new(1, 2, PixelFormat::Gray8, 2, &data).unwrap();
@@ -351,6 +512,20 @@ mod tests {
         let mut output = Vec::new();
 
         encode(&mut output, image).unwrap();
+
+        assert_eq!(output, b"P4\n3 2\n\x40\xa0");
+    }
+
+    #[test]
+    fn encode_native_writes_pbm_p4_bits() {
+        let image = NetpbmImage::Pbm {
+            width: 3,
+            height: 2,
+            data: vec![0, 1, 0, 1, 0, 1],
+        };
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
 
         assert_eq!(output, b"P4\n3 2\n\x40\xa0");
     }

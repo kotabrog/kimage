@@ -11,6 +11,27 @@ pub(crate) struct Dimensions {
     pub(crate) height: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NetpbmImage {
+    Pbm {
+        width: u32,
+        height: u32,
+        data: Vec<u8>,
+    },
+    Pgm {
+        width: u32,
+        height: u32,
+        maxval: u16,
+        data: Vec<u8>,
+    },
+    Ppm {
+        width: u32,
+        height: u32,
+        maxval: u16,
+        data: Vec<u8>,
+    },
+}
+
 pub(crate) struct HeaderParser<'a> {
     data: &'a [u8],
     position: usize,
@@ -142,20 +163,14 @@ pub(crate) fn read_bitmap_header(
     Ok(dimensions)
 }
 
-pub(crate) fn read_sample_header(
+pub(crate) fn read_any_sample_header(
     parser: &mut HeaderParser<'_>,
     expected_magic: &[u8],
-) -> Result<Dimensions> {
+) -> Result<(Dimensions, u16)> {
     let dimensions = read_bitmap_header(parser, expected_magic)?;
     let max_value = parser.next_max_value()?;
 
-    if max_value != MAX_VALUE {
-        return Err(ImageError::InvalidHeader {
-            reason: "only max value 255 is supported",
-        });
-    }
-
-    Ok(dimensions)
+    Ok((dimensions, max_value as u16))
 }
 
 pub(crate) fn validate_image_view(
@@ -183,14 +198,15 @@ pub(crate) fn validate_image_view(
     )
 }
 
-pub(crate) fn read_ascii_samples(
+pub(crate) fn read_ascii_samples_with_max_value(
     parser: &mut HeaderParser<'_>,
     expected: usize,
+    max_value: u32,
 ) -> Result<Vec<u8>> {
     let mut pixels = Vec::with_capacity(expected);
 
     for _ in 0..expected {
-        pixels.push(parser.next_u8_sample(MAX_VALUE)?);
+        pixels.push(parser.next_u8_sample(max_value)?);
     }
 
     reject_trailing_tokens(parser)?;
@@ -262,9 +278,19 @@ pub(crate) fn write_sample_header<W: Write>(
     magic: &str,
     image: ImageView<'_>,
 ) -> Result<()> {
+    write_sample_header_with_max_value(writer, magic, image.width, image.height, MAX_VALUE as u16)
+}
+
+pub(crate) fn write_sample_header_with_max_value<W: Write>(
+    writer: &mut W,
+    magic: &str,
+    width: u32,
+    height: u32,
+    maxval: u16,
+) -> Result<()> {
     writeln!(writer, "{magic}")?;
-    writeln!(writer, "{} {}", image.width, image.height)?;
-    writeln!(writer, "{MAX_VALUE}")?;
+    writeln!(writer, "{width} {height}")?;
+    writeln!(writer, "{maxval}")?;
 
     Ok(())
 }
@@ -274,8 +300,17 @@ pub(crate) fn write_bitmap_header<W: Write>(
     magic: &str,
     image: ImageView<'_>,
 ) -> Result<()> {
+    write_bitmap_header_dimensions(writer, magic, image.width, image.height)
+}
+
+pub(crate) fn write_bitmap_header_dimensions<W: Write>(
+    writer: &mut W,
+    magic: &str,
+    width: u32,
+    height: u32,
+) -> Result<()> {
     writeln!(writer, "{magic}")?;
-    writeln!(writer, "{} {}", image.width, image.height)?;
+    writeln!(writer, "{width} {height}")?;
 
     Ok(())
 }
@@ -448,35 +483,41 @@ mod tests {
     }
 
     #[test]
-    fn read_sample_header_reads_magic_dimensions_and_max_value() {
+    fn read_any_sample_header_reads_magic_dimensions_and_max_value() {
         let mut parser = HeaderParser::new(b"P6\n2 1\n255\n");
 
         assert_eq!(
-            read_sample_header(&mut parser, b"P6").unwrap(),
-            Dimensions {
-                width: 2,
-                height: 1
-            }
+            read_any_sample_header(&mut parser, b"P6").unwrap(),
+            (
+                Dimensions {
+                    width: 2,
+                    height: 1
+                },
+                255
+            )
         );
     }
 
     #[test]
-    fn read_sample_header_rejects_unsupported_max_value() {
+    fn read_any_sample_header_accepts_max_value_above_255() {
         let mut parser = HeaderParser::new(b"P6\n1 1\n256\n");
-        let error = read_sample_header(&mut parser, b"P6").unwrap_err();
 
         assert_eq!(
-            error,
-            ImageError::InvalidHeader {
-                reason: "only max value 255 is supported"
-            }
+            read_any_sample_header(&mut parser, b"P6").unwrap(),
+            (
+                Dimensions {
+                    width: 1,
+                    height: 1
+                },
+                256
+            )
         );
     }
 
     #[test]
-    fn read_sample_header_rejects_zero_max_value() {
+    fn read_any_sample_header_rejects_zero_max_value() {
         let mut parser = HeaderParser::new(b"P6\n1 1\n0\n");
-        let error = read_sample_header(&mut parser, b"P6").unwrap_err();
+        let error = read_any_sample_header(&mut parser, b"P6").unwrap_err();
 
         assert_eq!(
             error,
@@ -512,7 +553,10 @@ mod tests {
     fn read_ascii_samples_reads_expected_samples() {
         let mut parser = HeaderParser::new(b"1 2 3");
 
-        assert_eq!(read_ascii_samples(&mut parser, 3).unwrap(), [1, 2, 3]);
+        assert_eq!(
+            read_ascii_samples_with_max_value(&mut parser, 3, MAX_VALUE).unwrap(),
+            [1, 2, 3]
+        );
     }
 
     #[test]
@@ -578,7 +622,7 @@ mod tests {
     fn raster_slice_returns_only_current_image_raster() {
         let data = b"P5\n2 1\n255\n\x10\x20P5\n1 1\n255\n\x30";
         let mut parser = HeaderParser::new(data);
-        let dimensions = read_sample_header(&mut parser, b"P5").unwrap();
+        let (dimensions, _) = read_any_sample_header(&mut parser, b"P5").unwrap();
         parser.consume_raster_separator().unwrap();
 
         assert_eq!(
@@ -591,7 +635,7 @@ mod tests {
     fn raster_slice_rejects_short_raster() {
         let data = b"P5\n2 1\n255\n\x10";
         let mut parser = HeaderParser::new(data);
-        let dimensions = read_sample_header(&mut parser, b"P5").unwrap();
+        let (dimensions, _) = read_any_sample_header(&mut parser, b"P5").unwrap();
         parser.consume_raster_separator().unwrap();
         let error = raster_slice(data, &parser, dimensions, PixelFormat::Gray8).unwrap_err();
 

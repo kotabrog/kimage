@@ -3,3 +3,5 @@ pub(crate) mod netpbm;
 pub mod pbm;
 pub mod pgm;
 pub mod ppm;
+
+pub use netpbm::NetpbmImage;
