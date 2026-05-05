@@ -74,6 +74,17 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NetpbmImage>> {
     Ok(images)
 }
 
+/// Decodes all binary PBM P4 images from a multi-image stream.
+///
+/// PBM bits are expanded to `PixelFormat::Gray8`, where `0` is black and `255`
+/// is white.
+pub fn decode_all<R: Read>(reader: &mut R) -> Result<Vec<Image>> {
+    decode_all_native(reader)?
+        .into_iter()
+        .map(Image::try_from)
+        .collect()
+}
+
 fn decode_one_native(data: &[u8], parser: &mut HeaderParser<'_>) -> Result<NetpbmImage> {
     let dimensions = read_bitmap_header(parser, BINARY_MAGIC)?;
     parser.consume_raster_separator()?;
@@ -522,6 +533,18 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn decode_all_reads_normalized_pbm_p4_images() {
+        let input = b"P4\n1 1\n\0P4\n1 1\n\x80";
+        let images = decode_all(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].pixel_format, PixelFormat::Gray8);
+        assert_eq!(images[0].data, [255]);
+        assert_eq!(images[1].pixel_format, PixelFormat::Gray8);
+        assert_eq!(images[1].data, [0]);
     }
 
     #[test]

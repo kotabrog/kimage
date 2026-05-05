@@ -31,7 +31,7 @@
 - PNM
   - P1..P6 の自動判別 decode
   - P1..P6 の明示指定 encode
-  - P4 / P5 / P6 の multi-image stream
+  - P4 / P5 / P6 の正規化済み / native multi-image stream
 - BMP
   - 24-bit uncompressed bottom-up
   - `BITMAPINFOHEADER`
@@ -169,9 +169,10 @@ src/
 
 - PBM / PGM / PPM / PAM は、それぞれ同一subformatの画像を区切りなしで複数連結できる。
 - Plain PBM / PGM / PPM は仕様上、1ファイル1画像として扱う。
-- `pbm::decode_all_native`, `pgm::decode_all_native`, `ppm::decode_all_native` は同一subformatのstreamを扱う。
+- `pbm::decode_all`, `pgm::decode_all`, `ppm::decode_all` は同一subformatのstreamを正規化済み `Image` として扱う。
+- `pbm::decode_all_native`, `pgm::decode_all_native`, `ppm::decode_all_native` は同一subformatのstreamを native image として扱う。
 - P1 / P2 / P3 の複数画像風入力は、仕様重視でエラーにする。
-- `pnm::decode_all_native` は最初のmagic numberでsubformatを決め、そのsubformatのstreamとして読む。異なるsubformatの混在streamを標準対応しない。
+- `pnm::decode_all`, `pnm::decode_all_native` は最初のmagic numberでsubformatを決め、そのsubformatのstreamとして読む。異なるsubformatの混在streamを標準対応しない。
 - Netpbm の whitespace は space, TAB, CR, LF, VT, FF。
 - コメントは `#` から次の CR または LF の直前まで。
 - PBM P4 は1bit/pixelで、各行は8bit単位に詰める。余ったbitは don't care。

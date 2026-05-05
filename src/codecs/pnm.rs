@@ -54,6 +54,17 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NetpbmImage>> {
     }
 }
 
+/// Decodes all images from a binary PBM, PGM, or PPM multi-image stream.
+///
+/// This API supports P4, P5, and P6 streams. Plain P1, P2, and P3 are single
+/// image formats and return `ImageError::UnsupportedFormat`.
+pub fn decode_all<R: Read>(reader: &mut R) -> Result<Vec<Image>> {
+    decode_all_native(reader)?
+        .into_iter()
+        .map(Image::try_from)
+        .collect()
+}
+
 /// Encodes an image view as a PBM, PGM, or PPM image.
 pub fn encode<W: Write>(
     writer: &mut W,
@@ -320,6 +331,18 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn decode_all_reads_normalized_multi_image_stream() {
+        let input = b"P6\n1 1\n15\n\x0f\0\x05P6\n1 1\n255\n\x01\x02\x03";
+        let images = decode_all(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].pixel_format, PixelFormat::Rgb8);
+        assert_eq!(images[0].data, [255, 0, 85]);
+        assert_eq!(images[1].pixel_format, PixelFormat::Rgb8);
+        assert_eq!(images[1].data, [1, 2, 3]);
     }
 
     #[test]

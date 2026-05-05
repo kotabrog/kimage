@@ -23,14 +23,14 @@ Supported:
 - native PGM/PPM APIs that preserve `maxval` and sample values
 - conversion APIs between `NetpbmImage` and `Image` / `ImageView`
 - PNM decode APIs that auto-detect P1 through P6 and encode APIs that select P1 through P6
-- native multi-image streams for binary PBM P4, PGM P5, and PPM P6
+- normalized and native multi-image streams for binary PBM P4, PGM P5, and PPM P6
 
 ### PAM
 
 Supported:
 
 - PAM P7 native decode and encode
-- PAM P7 native multi-image streams
+- PAM P7 normalized and native multi-image streams
 - `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, `RGB_ALPHA`, and unknown `TUPLTYPE` in native APIs
 - `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, and `RGB_ALPHA` conversion to `Image`
 - explicit PAM tuple type selection for `ImageView` encode

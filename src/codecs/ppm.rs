@@ -41,6 +41,17 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NetpbmImage>> {
     Ok(images)
 }
 
+/// Decodes all binary PPM P6 images from a multi-image stream.
+///
+/// This implementation normalizes PPM samples to `PixelFormat::Rgb8` or
+/// `PixelFormat::Rgb16`.
+pub fn decode_all<R: Read>(reader: &mut R) -> Result<Vec<Image>> {
+    decode_all_native(reader)?
+        .into_iter()
+        .map(Image::try_from)
+        .collect()
+}
+
 fn decode_one_native(data: &[u8], parser: &mut HeaderParser<'_>) -> Result<NetpbmImage> {
     let (dimensions, maxval) = read_any_sample_header(parser, MAGIC)?;
     parser.consume_raster_separator()?;
@@ -402,6 +413,18 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn decode_all_reads_normalized_ppm_p6_images() {
+        let input = b"P6\n1 1\n15\n\x0f\0\x05P6\n1 1\n255\n\x01\x02\x03";
+        let images = decode_all(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].pixel_format, PixelFormat::Rgb8);
+        assert_eq!(images[0].data, [255, 0, 85]);
+        assert_eq!(images[1].pixel_format, PixelFormat::Rgb8);
+        assert_eq!(images[1].data, [1, 2, 3]);
     }
 
     #[test]

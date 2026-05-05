@@ -471,8 +471,7 @@ public API の個別対応候補:
 - `io` module は内部 endian helper として扱い、crate root から公開しない
 - `decode_all` の有無を形式間で揃える
   - `pam` は `decode_all` / `decode_all_native` を持つ
-  - `pbm` / `pgm` / `ppm` / `pnm` は `decode_all_native` のみで、正規化済み `decode_all` がない
-  - encode 側は `encode_all` / `encode_all_native` が揃っているため、decode 側も追加するか検討する
+  - `pbm` / `pgm` / `ppm` / `pnm` にも正規化済み `decode_all` を追加し、形式間で揃える
 - `ImageError::Io` が `std::io::ErrorKind` だけを保持している点を見直す
   - 現状は `Clone` / `Eq` しやすい
   - 元の IO error message は失われるため、利用者向けには `std::io::Error` を保持する設計も候補にする
