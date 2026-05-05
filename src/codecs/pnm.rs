@@ -7,12 +7,15 @@ use super::{
     NetpbmImage, gray_image_to_pbm_native, gray_image_to_pgm_native, rgb_image_to_ppm_native,
 };
 
-/// Binary PNM subformat used when encoding a generic image view.
+/// PNM subformat used when encoding a generic image view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PnmEncodeFormat {
-    Pbm,
-    Pgm,
-    Ppm,
+    PbmAscii,
+    PgmAscii,
+    PpmAscii,
+    PbmBinary,
+    PgmBinary,
+    PpmBinary,
 }
 
 /// Decodes a PBM, PGM, or PPM image by detecting the P1..P6 magic number.
@@ -51,19 +54,26 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NetpbmImage>> {
     }
 }
 
-/// Encodes an image view as a binary PBM, PGM, or PPM image.
+/// Encodes an image view as a PBM, PGM, or PPM image.
 pub fn encode<W: Write>(
     writer: &mut W,
     image: ImageView<'_>,
     format: PnmEncodeFormat,
 ) -> Result<()> {
     let image = match format {
-        PnmEncodeFormat::Pbm => gray_image_to_pbm_native(image)?,
-        PnmEncodeFormat::Pgm => gray_image_to_pgm_native(image)?,
-        PnmEncodeFormat::Ppm => rgb_image_to_ppm_native(image)?,
+        PnmEncodeFormat::PbmAscii | PnmEncodeFormat::PbmBinary => gray_image_to_pbm_native(image)?,
+        PnmEncodeFormat::PgmAscii | PnmEncodeFormat::PgmBinary => gray_image_to_pgm_native(image)?,
+        PnmEncodeFormat::PpmAscii | PnmEncodeFormat::PpmBinary => rgb_image_to_ppm_native(image)?,
     };
 
-    encode_native(writer, &image)
+    match format {
+        PnmEncodeFormat::PbmAscii => pbm::encode_ascii_native(writer, &image),
+        PnmEncodeFormat::PgmAscii => pgm::encode_ascii_native(writer, &image),
+        PnmEncodeFormat::PpmAscii => ppm::encode_ascii_native(writer, &image),
+        PnmEncodeFormat::PbmBinary | PnmEncodeFormat::PgmBinary | PnmEncodeFormat::PpmBinary => {
+            encode_native(writer, &image)
+        }
+    }
 }
 
 /// Encodes a native Netpbm image as binary PBM, PGM, or PPM.
@@ -89,9 +99,12 @@ pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NetpbmImage]) -> Re
     }
 
     match format {
-        PnmEncodeFormat::Pbm => pbm::encode_all_native(writer, images),
-        PnmEncodeFormat::Pgm => pgm::encode_all_native(writer, images),
-        PnmEncodeFormat::Ppm => ppm::encode_all_native(writer, images),
+        PnmEncodeFormat::PbmBinary => pbm::encode_all_native(writer, images),
+        PnmEncodeFormat::PgmBinary => pgm::encode_all_native(writer, images),
+        PnmEncodeFormat::PpmBinary => ppm::encode_all_native(writer, images),
+        PnmEncodeFormat::PbmAscii | PnmEncodeFormat::PgmAscii | PnmEncodeFormat::PpmAscii => {
+            unreachable!("native format is always binary")
+        }
     }
 }
 
@@ -103,9 +116,9 @@ fn read_all<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
 
 fn native_format(image: &NetpbmImage) -> PnmEncodeFormat {
     match image {
-        NetpbmImage::Pbm { .. } => PnmEncodeFormat::Pbm,
-        NetpbmImage::Pgm { .. } => PnmEncodeFormat::Pgm,
-        NetpbmImage::Ppm { .. } => PnmEncodeFormat::Ppm,
+        NetpbmImage::Pbm { .. } => PnmEncodeFormat::PbmBinary,
+        NetpbmImage::Pgm { .. } => PnmEncodeFormat::PgmBinary,
+        NetpbmImage::Ppm { .. } => PnmEncodeFormat::PpmBinary,
     }
 }
 
@@ -301,12 +314,45 @@ mod tests {
     }
 
     #[test]
+    fn encode_writes_pbm_p1_from_gray8_image() {
+        let data = [255, 0];
+        let image = ImageView::new(2, 1, PixelFormat::Gray8, 2, &data).unwrap();
+        let mut output = Vec::new();
+
+        encode(&mut output, image, PnmEncodeFormat::PbmAscii).unwrap();
+
+        assert_eq!(output, b"P1\n2 1\n0 1\n");
+    }
+
+    #[test]
+    fn encode_writes_pgm_p2_from_gray8_image() {
+        let data = [0, 255];
+        let image = ImageView::new(2, 1, PixelFormat::Gray8, 2, &data).unwrap();
+        let mut output = Vec::new();
+
+        encode(&mut output, image, PnmEncodeFormat::PgmAscii).unwrap();
+
+        assert_eq!(output, b"P2\n2 1\n255\n0\n255\n");
+    }
+
+    #[test]
+    fn encode_writes_ppm_p3_from_rgb8_image() {
+        let data = [255, 0, 128];
+        let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
+        let mut output = Vec::new();
+
+        encode(&mut output, image, PnmEncodeFormat::PpmAscii).unwrap();
+
+        assert_eq!(output, b"P3\n1 1\n255\n255 0 128\n");
+    }
+
+    #[test]
     fn encode_writes_pbm_p4_from_gray8_image() {
         let data = [255, 0];
         let image = ImageView::new(2, 1, PixelFormat::Gray8, 2, &data).unwrap();
         let mut output = Vec::new();
 
-        encode(&mut output, image, PnmEncodeFormat::Pbm).unwrap();
+        encode(&mut output, image, PnmEncodeFormat::PbmBinary).unwrap();
 
         assert_eq!(output, b"P4\n2 1\n\x40");
     }
@@ -317,7 +363,7 @@ mod tests {
         let image = ImageView::new(2, 1, PixelFormat::Gray8, 2, &data).unwrap();
         let mut output = Vec::new();
 
-        encode(&mut output, image, PnmEncodeFormat::Pgm).unwrap();
+        encode(&mut output, image, PnmEncodeFormat::PgmBinary).unwrap();
 
         assert_eq!(output, b"P5\n2 1\n255\n\0\xff");
     }
@@ -328,7 +374,7 @@ mod tests {
         let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
         let mut output = Vec::new();
 
-        encode(&mut output, image, PnmEncodeFormat::Ppm).unwrap();
+        encode(&mut output, image, PnmEncodeFormat::PpmBinary).unwrap();
 
         assert_eq!(output, b"P6\n1 1\n255\n\xff\0\x80");
     }
@@ -337,7 +383,7 @@ mod tests {
     fn encode_rejects_non_black_and_white_pbm_samples() {
         let data = [128];
         let image = ImageView::new(1, 1, PixelFormat::Gray8, 1, &data).unwrap();
-        let error = encode(&mut Vec::new(), image, PnmEncodeFormat::Pbm).unwrap_err();
+        let error = encode(&mut Vec::new(), image, PnmEncodeFormat::PbmAscii).unwrap_err();
 
         assert_eq!(
             error,
@@ -351,7 +397,7 @@ mod tests {
     fn encode_rejects_pixel_format_not_matching_requested_format() {
         let data = [255, 0, 128];
         let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
-        let error = encode(&mut Vec::new(), image, PnmEncodeFormat::Pgm).unwrap_err();
+        let error = encode(&mut Vec::new(), image, PnmEncodeFormat::PgmBinary).unwrap_err();
 
         assert_eq!(
             error,
