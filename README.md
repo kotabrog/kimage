@@ -22,7 +22,7 @@ Supported:
 - PGM/PPM samples normalized to `Gray16` / `Rgb16` for `maxval >= 256`
 - native PGM/PPM APIs that preserve `maxval` and sample values
 - conversion APIs between `NetpbmImage` and `Image` / `ImageView`
-- PNM decode APIs that auto-detect P1 through P6
+- PNM decode APIs that auto-detect P1 through P6 and encode APIs that select P4 through P6
 - native multi-image streams for binary PBM P4, PGM P5, and PPM P6
 
 Unsupported:
