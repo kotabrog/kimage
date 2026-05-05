@@ -11,6 +11,7 @@
 - PBM P1 / P4
 - PGM P2 / P5
 - PPM P3 / P6
+- PNM P1..P6 上位API
 - BMP 24-bit uncompressed bottom-up
 - 各形式の roundtrip example
 
@@ -29,7 +30,8 @@ feat/netpbm-native-image
 feat/netpbm-normalization
 feat/netpbm-16bit
 feat/netpbm-multi-image
-docs/pam-support-plan
+feat/pnm-api
+chore/pam-p7-planning
 feat/pam-codec
 chore/prepare-initial-release
 ```
@@ -287,7 +289,9 @@ P1..P6 を magic number で自動判別する上位APIを追加する。
 - `pnm::decode_all_native` は最初のmagic numberでsubformatを決め、そのsubformatのstreamとして読む
 - `pnm::decode_all_native` は異なるsubformatの混在streamを標準対応しない
 - 必要なら `pnm::Decoder` 型を追加し、1枚ずつ読み進められるようにする
-- encode側は、必要性が明確になるまで形式別APIを優先し、pnm上位APIではdecodeを先に固める
+- `pnm::encode` は `PnmEncodeFormat` で P1..P6 を明示指定する
+- `pnm::encode_all` / `pnm::encode_all_native` は P4 / P5 / P6 の binary multi-image stream のみ扱う
+- P1 / P2 / P3 は仕様上1ファイル1画像として扱い、multi-image APIでは `UnsupportedFormat` にする
 
 想定するテスト:
 
@@ -296,29 +300,47 @@ P1..P6 を magic number で自動判別する上位APIを追加する。
 - `pnm::decode_native` が `NetpbmImage` の適切な variant を返すこと
 - `pnm::decode_all_native` が最初のmagic numberでsubformatを決めること
 - `pnm::decode_all_native` が異なるsubformatの混在streamをエラーにすること
+- `pnm::encode` が P1..P6 を明示指定して書けること
+- `pnm::encode_all` が P4 / P5 / P6 の multi-image stream を書けること
 - unsupported magic number をエラーにすること
 
-## 9. docs/pam-support-plan
+## 9. chore/pam-p7-planning
 
-PAM P7 の詳細計画を別途整理する。
+PAM P7 の詳細計画を整理する。
 
 PAM は PBM / PGM / PPM とはヘッダ構造が大きく違い、alpha 付き tuple type や任意の `DEPTH` も絡むため、実装直前に改めて対応範囲を決める。
 
 方針:
 
-- 可能であれば PAM P7 は広く対応する
-- ただし、詳細な対応範囲は PGM / PPM の 16-bit 対応と multi-image API が固まった後に決める
-- 特に alpha 付き tuple type は `PixelFormat` の追加方針と合わせて判断する
+- PAM は `NetpbmImage` には混ぜず、別途 `PamImage` を追加する
+- native API は PAM raster として妥当な範囲を広めに扱う
+- `TUPLTYPE` が未指定または未知でも、`decode_native` では保持できるようにする
+- 汎用 `Image` への変換は、意味が明確で既存 `PixelFormat` に対応できる tuple type のみ対応する
+- PAM の multi-image stream は初回から対応する
+- `DEPTH` が tuple type の期待値より大きい入力は、初期実装では受け入れずエラーにする
 
 検討する項目:
 
-- 対応する `TUPLTYPE`
-- `DEPTH` と `PixelFormat` の対応表
-- `TUPLTYPE` なしのPAMをどこまで受け入れるか
-- alpha 付き tuple type の内部表現
-- PAM の multi-image stream 対応
+- `PamImage` / `PamTupleType` の public API
+- `decode_native` / `decode_all_native` / `encode_native` / `encode_all_native` の仕様
+- `decode` / `encode` で `Image` / `ImageView` と相互変換する対応範囲
+- alpha 付き tuple type のうち、既存 `PixelFormat` で扱える範囲と後回しにする範囲
+- unknown `TUPLTYPE` の保持方法
 
-## 8. feat/pam-codec
+決定事項:
+
+- `PamImage` は `width`, `height`, `depth`, `maxval`, `tuple_type`, `data` を持つ native 保持型にする
+- `PamTupleType` は公式 tuple type と `Other(String)` を表現する
+- `TUPLTYPE` なしは native では許可し、汎用 `Image` への変換では `UnsupportedFormat` とする
+- `WIDTH`, `HEIGHT`, `DEPTH`, `MAXVAL`, `ENDHDR` は必須
+- `MAXVAL` は `1..=65535`
+- file raster は `maxval < 256` なら1 byte/sample、`maxval >= 256` なら2 bytes/sample big-endian
+- native `data` は `maxval >= 256` の sample を little-endian `u16` として保持する
+- `BLACKANDWHITE` は PAM 仕様通り `0 = black`, `1 = white` として扱う
+- `decode` / `encode` はまず `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `RGB_ALPHA` の既存 `PixelFormat` に変換できる範囲に対応する
+- `GRAYSCALE_ALPHA`, `BLACKANDWHITE_ALPHA`, `RGB_ALPHA` + `maxval >= 256` の汎用 `Image` 変換は、`GrayAlpha8` / `GrayAlpha16` / `Rgba16` などの追加検討が必要なため後回しにする
+
+## 10. feat/pam-codec
 
 PAM P7 を追加する。
 
@@ -327,28 +349,78 @@ PAM P7 を追加する。
 - `TUPLTYPE BLACKANDWHITE`
 - `TUPLTYPE GRAYSCALE`
 - `TUPLTYPE RGB`
+- `TUPLTYPE BLACKANDWHITE_ALPHA`
 - `TUPLTYPE GRAYSCALE_ALPHA`
 - `TUPLTYPE RGB_ALPHA`
 
 方針:
 
+- `pam.rs` を追加する
+- `PamImage` と `PamTupleType` を追加する
 - `WIDTH`, `HEIGHT`, `DEPTH`, `MAXVAL`, `ENDHDR` を必須として扱う
-- `TUPLTYPE` は任意だが、対応 tuple type の判定に使う
+- `TUPLTYPE` は任意として扱い、native では未指定を保持する
+- 複数 `TUPLTYPE` は仕様通り空白区切りで連結する
 - `MAXVAL` は `1..=65535`
-- raster sample は maxval に応じた最小byte数で、big-endianとして読む
+- raster sample は maxval に応じた最小byte数で、ファイル上 big-endian として読む
+- native `data` では 16-bit sample を little-endian として保持する
 - PBM相当の `BLACKANDWHITE` は PAM では `0 = black`, `1 = white` であり、PBM の `0 = white`, `1 = black` と逆である点に注意する
+- unknown `TUPLTYPE` は `decode_native` で保持し、`decode` では `UnsupportedFormat` にする
+- `decode_all_native` / `encode_all_native` で PAM multi-image stream を扱う
 
 想定するテスト:
 
-- GRAYSCALE / RGB の decode / encode
-- BLACKANDWHITE の decode
+- GRAYSCALE / RGB の native decode / encode
+- BLACKANDWHITE の native decode / encode
+- RGB_ALPHA + `maxval < 256` の `Rgba8` decode / encode
+- `maxval >= 256` の 16-bit sample が内部 little-endian で保持されること
+- `TUPLTYPE` なしを native で読めること
+- unknown `TUPLTYPE` を native で保持できること
+- `decode` が unknown `TUPLTYPE` を `UnsupportedFormat` にすること
+- multi-image stream の decode / encode
 - 必須header不足
 - 重複header
 - 不明header
 - `ENDHDR` 不足
-- alpha付き tuple type を対応する場合は `GrayAlpha8` / `Rgba8` などの表現テスト
+- tuple type と `DEPTH` が一致しない場合
+- `MAXVAL` が 0 または 65536 以上のケース
+- short raster data
+- sample 値が `MAXVAL` を超えるケース
+- `GRAYSCALE_ALPHA`, `BLACKANDWHITE_ALPHA`, `RGB_ALPHA` + `maxval >= 256` の汎用 `Image` 変換を未対応として扱うこと
 
-## 9. chore/prepare-initial-release
+API候補:
+
+```rust
+pub struct PamImage {
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub maxval: u16,
+    pub tuple_type: Option<PamTupleType>,
+    pub data: Vec<u8>,
+}
+
+pub enum PamTupleType {
+    BlackAndWhite,
+    Grayscale,
+    Rgb,
+    BlackAndWhiteAlpha,
+    GrayscaleAlpha,
+    RgbAlpha,
+    Other(String),
+}
+```
+
+```rust
+pam::decode(...)
+pam::decode_native(...)
+pam::decode_all_native(...)
+
+pam::encode(...)
+pam::encode_native(...)
+pam::encode_all_native(...)
+```
+
+## 11. chore/prepare-initial-release
 
 Netpbm の対応範囲を反映したうえで、初回の仮リリースとして `main` へマージできる状態に整える。
 
