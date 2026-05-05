@@ -40,19 +40,17 @@
 
 ## 次の目標
 
-次は Netpbm 系フォーマットについて、仕様上の残りを実装計画に落とし込み、初回リリース前に対応範囲を広げる。
+次は初回の仮リリースに向けて、実装済みの Netpbm / PAM / BMP 対応範囲を README と計画メモに正確に反映する。
+
+この段階では PNG などの新形式には進まず、`develop` から `main` へ持っていける状態に整える。
 
 対象:
 
-- parser の仕様追従
-- PGM / PPM の `maxval` 1..=65535
-- PGM / PPM の 16-bit sample
-- Netpbm の `maxval` を保持する native image 型
-- native image から汎用 `Image` への正規化変換
-- 複数画像を連結した Netpbm stream
-- PAM P7
-
-README とリリース準備は、Netpbm の残作業が完了してから行う。
+- README の対応表と examples の整理
+- public API の名前と公開範囲の軽い棚卸し
+- `memo/` の完了済みタスクと初回リリース後タスクの整理
+- license file と Cargo metadata の確認
+- examples と CI の実行確認
 
 ## 設計方針
 

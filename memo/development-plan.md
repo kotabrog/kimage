@@ -441,6 +441,44 @@ Netpbm の対応範囲を反映したうえで、初回の仮リリースとし�
 
 この段階では、PNG にはまだ進まない。
 
+詳細方針:
+
+- 新機能追加ではなく、説明・計画・公開APIの整理に集中する
+- README は利用者が現在の対応範囲を把握しやすい形にする
+- `memo/` は「完了済み」と「初回リリース後」を分け、次の作業が読み取れる状態にする
+- public API は大きく作り替えず、初回リリース前に破壊的変更すべきものがないか軽く棚卸しする
+- examples と CI を実行し、README に載せている内容が実際に動くことを確認する
+
+README で確認・整理する項目:
+
+- 対応形式を表または読みやすいセクションで整理する
+- PBM / PGM / PPM / PNM / PAM / BMP の supported / unsupported を最新実装に合わせる
+- 通常 API と native API の違いを短く説明する
+- `Image` / `ImageView` / `PixelFormat` の役割を最小限説明する
+- examples の一覧を出力ファイル名付きで整理する
+- PNM は P1..P6 の上位API、PAM は P7 専用APIであることを明確にする
+
+public API の確認項目:
+
+- `pub mod io` を公開 API として残すか判断する
+- `codecs::netpbm` は private のまま、`NetpbmImage` と変換関数だけ re-export する形でよいか確認する
+- `PnmEncodeFormat` / `PamEncodeTupleType` の命名を初回リリース前に確認する
+- `decode_all` / `decode_all_native` / `encode_all` / `encode_all_native` の命名が形式間で揃っているか確認する
+- `ImageError` の variant と message が利用者に伝わるものになっているか確認する
+
+リポジトリ・crate metadata の確認項目:
+
+- `Cargo.toml` の `description`, `repository`, `readme`, `license` を確認する
+- `license = "MIT OR Apache-2.0"` に合わせ、`LICENSE-MIT` / `LICENSE-APACHE` の追加を検討する
+- crates.io publish を急がない場合、`keywords` / `categories` は必須にしない
+
+動作確認:
+
+- README に載せている examples を一通り実行する
+- `pamtopng` や `pamsplit` など外部コマンドがない環境でも example が失敗しないことを確認する
+- 最後に `make ci` を通す
+- 必要に応じて `cargo package --list` で crate に含まれるファイルを確認する
+
 ## 初回リリース後の候補
 
 Netpbm の対応範囲が固まった後に、PNG の最小 encoder へ進む。
