@@ -4,7 +4,7 @@ use crate::codecs::{pbm, pgm, ppm};
 use crate::{Image, ImageError, ImageView, Result};
 
 use super::{
-    NetpbmImage, gray_image_to_pbm_native, gray_image_to_pgm_native, rgb_image_to_ppm_native,
+    NetpbmImage, image_view_to_pbm_native, image_view_to_pgm_native, image_view_to_ppm_native,
 };
 
 /// PNM subformat used when encoding a generic image view.
@@ -72,9 +72,9 @@ pub fn encode<W: Write>(
     format: PnmEncodeFormat,
 ) -> Result<()> {
     let image = match format {
-        PnmEncodeFormat::PbmAscii | PnmEncodeFormat::PbmBinary => gray_image_to_pbm_native(image)?,
-        PnmEncodeFormat::PgmAscii | PnmEncodeFormat::PgmBinary => gray_image_to_pgm_native(image)?,
-        PnmEncodeFormat::PpmAscii | PnmEncodeFormat::PpmBinary => rgb_image_to_ppm_native(image)?,
+        PnmEncodeFormat::PbmAscii | PnmEncodeFormat::PbmBinary => image_view_to_pbm_native(image)?,
+        PnmEncodeFormat::PgmAscii | PnmEncodeFormat::PgmBinary => image_view_to_pgm_native(image)?,
+        PnmEncodeFormat::PpmAscii | PnmEncodeFormat::PpmBinary => image_view_to_ppm_native(image)?,
     };
 
     match format {

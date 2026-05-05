@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    Dimensions, HeaderParser, NetpbmImage, gray_image_to_pbm_native, read_bitmap_header,
+    Dimensions, HeaderParser, NetpbmImage, image_view_to_pbm_native, read_bitmap_header,
     reject_trailing_tokens, validate_image_view, write_bitmap_header,
     write_bitmap_header_dimensions,
 };
@@ -241,7 +241,7 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
 pub fn encode_all<W: Write>(writer: &mut W, images: &[ImageView<'_>]) -> Result<()> {
     let images = images
         .iter()
-        .map(|image| gray_image_to_pbm_native(*image))
+        .map(|image| image_view_to_pbm_native(*image))
         .collect::<Result<Vec<_>>>()?;
 
     encode_all_native(writer, &images)

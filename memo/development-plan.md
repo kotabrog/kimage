@@ -263,8 +263,12 @@ impl NetpbmImage {
 ```
 
 ```rust
-pub fn gray_image_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
-pub fn rgb_image_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+pub fn image_view_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+pub fn image_view_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+pub fn image_view_to_pam_native(
+    image: ImageView<'_>,
+    tuple_type: PamEncodeTupleType,
+) -> Result<PamImage>;
 ```
 
 想定するテスト:
@@ -475,9 +479,9 @@ public API の個別対応候補:
 - `ImageError::Io` は `std::io::Error` を保持し、`Error::source()` から元の IO error を参照できる形にする
   - `Clone` / `Eq` は実装しない
   - 非IOエラーのテストや比較用途のため、`PartialEq` は手書きで維持する
-- `gray_image_to_pbm_native`, `gray_image_to_pgm_native`, `rgb_image_to_ppm_native` の命名を見直す
-  - 現状は意味が明確だが、やや実装寄り
-  - 初回リリースでは維持し、将来的に `TryFrom` などの変換APIを追加する余地を残す
+- `image_view_to_pbm_native`, `image_view_to_pgm_native`, `image_view_to_ppm_native`, `image_view_to_pam_native` に名前を揃える
+  - `ImageView` から native image 型へ変換する helper として公開する
+  - 将来的に `TryFrom` などの変換APIを追加する余地は残す
 - `Image` / `ImageView` の public field 方針を確認する
   - 現状は小さい画像バッファ型として扱いやすい
   - 不変条件をより強く守る設計にするなら getter 中心も候補だが、初回リリースでは現状維持を基本にする

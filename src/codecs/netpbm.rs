@@ -47,7 +47,7 @@ impl TryFrom<NetpbmImage> for Image {
 }
 
 /// Converts a grayscale image view into a native PGM image.
-pub fn gray_image_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
+pub fn image_view_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
     let maxval = match image.pixel_format {
         PixelFormat::Gray8 => u16::from(u8::MAX),
         PixelFormat::Gray16 => u16::MAX,
@@ -64,7 +64,7 @@ pub fn gray_image_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
 }
 
 /// Converts an RGB image view into a native PPM image.
-pub fn rgb_image_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
+pub fn image_view_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
     let maxval = match image.pixel_format {
         PixelFormat::Rgb8 => u16::from(u8::MAX),
         PixelFormat::Rgb16 => u16::MAX,
@@ -81,7 +81,7 @@ pub fn rgb_image_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
 }
 
 /// Converts a black-and-white `Gray8` image view into a native PBM image.
-pub fn gray_image_to_pbm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
+pub fn image_view_to_pbm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
     let image = validate_image_view(image, PixelFormat::Gray8)?;
     let mut data = Vec::with_capacity(image.width as usize * image.height as usize);
 
@@ -631,12 +631,12 @@ mod tests {
     }
 
     #[test]
-    fn gray_image_to_pgm_native_converts_gray8() {
+    fn image_view_to_pgm_native_converts_gray8() {
         let data = [0, 255];
         let image = ImageView::new(2, 1, PixelFormat::Gray8, 2, &data).unwrap();
 
         assert_eq!(
-            gray_image_to_pgm_native(image).unwrap(),
+            image_view_to_pgm_native(image).unwrap(),
             NetpbmImage::Pgm {
                 width: 2,
                 height: 1,
@@ -647,12 +647,12 @@ mod tests {
     }
 
     #[test]
-    fn gray_image_to_pgm_native_converts_gray16() {
+    fn image_view_to_pgm_native_converts_gray16() {
         let data = [0x34, 0x12, 0xff, 0xff];
         let image = ImageView::new(2, 1, PixelFormat::Gray16, 4, &data).unwrap();
 
         assert_eq!(
-            gray_image_to_pgm_native(image).unwrap(),
+            image_view_to_pgm_native(image).unwrap(),
             NetpbmImage::Pgm {
                 width: 2,
                 height: 1,
@@ -663,12 +663,12 @@ mod tests {
     }
 
     #[test]
-    fn rgb_image_to_ppm_native_converts_rgb8() {
+    fn image_view_to_ppm_native_converts_rgb8() {
         let data = [255, 0, 0, 0, 255, 0];
         let image = ImageView::new(2, 1, PixelFormat::Rgb8, 6, &data).unwrap();
 
         assert_eq!(
-            rgb_image_to_ppm_native(image).unwrap(),
+            image_view_to_ppm_native(image).unwrap(),
             NetpbmImage::Ppm {
                 width: 2,
                 height: 1,
@@ -679,12 +679,12 @@ mod tests {
     }
 
     #[test]
-    fn rgb_image_to_ppm_native_converts_rgb16() {
+    fn image_view_to_ppm_native_converts_rgb16() {
         let data = [0x34, 0x12, 0x78, 0x56, 0xff, 0xff];
         let image = ImageView::new(1, 1, PixelFormat::Rgb16, 6, &data).unwrap();
 
         assert_eq!(
-            rgb_image_to_ppm_native(image).unwrap(),
+            image_view_to_ppm_native(image).unwrap(),
             NetpbmImage::Ppm {
                 width: 1,
                 height: 1,
@@ -695,12 +695,12 @@ mod tests {
     }
 
     #[test]
-    fn gray_image_to_pbm_native_converts_black_and_white_gray8() {
+    fn image_view_to_pbm_native_converts_black_and_white_gray8() {
         let data = [255, 0, 255, 0];
         let image = ImageView::new(2, 2, PixelFormat::Gray8, 2, &data).unwrap();
 
         assert_eq!(
-            gray_image_to_pbm_native(image).unwrap(),
+            image_view_to_pbm_native(image).unwrap(),
             NetpbmImage::Pbm {
                 width: 2,
                 height: 2,
@@ -710,10 +710,10 @@ mod tests {
     }
 
     #[test]
-    fn gray_image_to_pbm_native_rejects_intermediate_gray8() {
+    fn image_view_to_pbm_native_rejects_intermediate_gray8() {
         let data = [128];
         let image = ImageView::new(1, 1, PixelFormat::Gray8, 1, &data).unwrap();
-        let error = gray_image_to_pbm_native(image).unwrap_err();
+        let error = image_view_to_pbm_native(image).unwrap_err();
 
         assert_eq!(
             error,
@@ -729,7 +729,7 @@ mod tests {
         let image = ImageView::new(1, 2, PixelFormat::Gray8, 2, &data).unwrap();
 
         assert_eq!(
-            gray_image_to_pgm_native(image).unwrap(),
+            image_view_to_pgm_native(image).unwrap(),
             NetpbmImage::Pgm {
                 width: 1,
                 height: 2,
@@ -743,7 +743,7 @@ mod tests {
     fn image_to_native_conversion_rejects_unsupported_pixel_format() {
         let data = [0, 0, 0, 255];
         let image = ImageView::new(1, 1, PixelFormat::Rgba8, 4, &data).unwrap();
-        let error = rgb_image_to_ppm_native(image).unwrap_err();
+        let error = image_view_to_ppm_native(image).unwrap_err();
 
         assert_eq!(
             error,

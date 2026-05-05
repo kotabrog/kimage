@@ -439,7 +439,8 @@ fn rgba_to_image(image: PamImage) -> Result<Image> {
     Image::new(image.width, image.height, PixelFormat::Rgba16, data)
 }
 
-fn image_view_to_pam_native(
+/// Converts an image view into a native PAM image using the requested tuple type.
+pub fn image_view_to_pam_native(
     image: ImageView<'_>,
     tuple_type: PamEncodeTupleType,
 ) -> Result<PamImage> {
@@ -1061,6 +1062,24 @@ mod tests {
         assert_eq!(
             output,
             b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n\xff\0\x80"
+        );
+    }
+
+    #[test]
+    fn image_view_to_pam_native_converts_rgb8_image() {
+        let data = [255, 0, 128];
+        let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
+
+        assert_eq!(
+            image_view_to_pam_native(image, PamEncodeTupleType::Rgb).unwrap(),
+            PamImage {
+                width: 1,
+                height: 1,
+                depth: 3,
+                maxval: 255,
+                tuple_type: Some(PamTupleType::Rgb),
+                data: vec![255, 0, 128],
+            }
         );
     }
 

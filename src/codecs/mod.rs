@@ -7,6 +7,6 @@ pub mod pnm;
 pub mod ppm;
 
 pub use netpbm::{
-    NetpbmImage, gray_image_to_pbm_native, gray_image_to_pgm_native, rgb_image_to_ppm_native,
+    NetpbmImage, image_view_to_pbm_native, image_view_to_pgm_native, image_view_to_ppm_native,
 };
-pub use pam::{PamEncodeTupleType, PamImage, PamTupleType};
+pub use pam::{PamEncodeTupleType, PamImage, PamTupleType, image_view_to_pam_native};

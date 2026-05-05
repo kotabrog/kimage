@@ -1,9 +1,9 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, NetpbmImage, raster_slice, read_any_sample_header,
-    read_ascii_sample_bytes_with_max_value, rgb_image_to_ppm_native, validate_image_view,
-    write_packed_rows, write_sample_header_with_max_value,
+    HeaderParser, NetpbmImage, image_view_to_ppm_native, raster_slice, read_any_sample_header,
+    read_ascii_sample_bytes_with_max_value, validate_image_view, write_packed_rows,
+    write_sample_header_with_max_value,
 };
 use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
@@ -166,7 +166,7 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
 pub fn encode_all<W: Write>(writer: &mut W, images: &[ImageView<'_>]) -> Result<()> {
     let images = images
         .iter()
-        .map(|image| rgb_image_to_ppm_native(*image))
+        .map(|image| image_view_to_ppm_native(*image))
         .collect::<Result<Vec<_>>>()?;
 
     encode_all_native(writer, &images)
