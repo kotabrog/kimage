@@ -315,7 +315,7 @@ PAM は PBM / PGM / PPM とはヘッダ構造が大きく違い、alpha 付き t
 - PAM は `NetpbmImage` には混ぜず、別途 `PamImage` を追加する
 - native API は PAM raster として妥当な範囲を広めに扱う
 - `TUPLTYPE` が未指定または未知でも、`decode_native` では保持できるようにする
-- 汎用 `Image` への変換は、意味が明確で既存 `PixelFormat` に対応できる tuple type のみ対応する
+- 汎用 `Image` への変換は、意味が明確で `PixelFormat` に対応できる tuple type のみ対応する
 - PAM の multi-image stream は初回から対応する
 - `DEPTH` が tuple type の期待値より大きい入力は、初期実装では受け入れずエラーにする
 
@@ -324,7 +324,7 @@ PAM は PBM / PGM / PPM とはヘッダ構造が大きく違い、alpha 付き t
 - `PamImage` / `PamTupleType` の public API
 - `decode_native` / `decode_all_native` / `encode_native` / `encode_all_native` の仕様
 - `decode` / `encode` で `Image` / `ImageView` と相互変換する対応範囲
-- alpha 付き tuple type のうち、既存 `PixelFormat` で扱える範囲と後回しにする範囲
+- alpha 付き tuple type のために追加する `PixelFormat`
 - unknown `TUPLTYPE` の保持方法
 
 決定事項:
@@ -337,8 +337,9 @@ PAM は PBM / PGM / PPM とはヘッダ構造が大きく違い、alpha 付き t
 - file raster は `maxval < 256` なら1 byte/sample、`maxval >= 256` なら2 bytes/sample big-endian
 - native `data` は `maxval >= 256` の sample を little-endian `u16` として保持する
 - `BLACKANDWHITE` は PAM 仕様通り `0 = black`, `1 = white` として扱う
-- `decode` / `encode` はまず `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `RGB_ALPHA` の既存 `PixelFormat` に変換できる範囲に対応する
-- `GRAYSCALE_ALPHA`, `BLACKANDWHITE_ALPHA`, `RGB_ALPHA` + `maxval >= 256` の汎用 `Image` 変換は、`GrayAlpha8` / `GrayAlpha16` / `Rgba16` などの追加検討が必要なため後回しにする
+- `GrayAlpha8`, `GrayAlpha16`, `Rgba16` を追加し、alpha 付き tuple type も汎用 `Image` に変換できるようにする
+- `decode` は `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, `RGB_ALPHA` を汎用 `Image` に変換する
+- `encode` は `PamEncodeTupleType` で tuple type を明示指定し、`ImageView` の `PixelFormat` と合う場合のみ書き出す
 
 ## 10. feat/pam-codec
 
@@ -372,6 +373,9 @@ PAM P7 を追加する。
 - GRAYSCALE / RGB の native decode / encode
 - BLACKANDWHITE の native decode / encode
 - RGB_ALPHA + `maxval < 256` の `Rgba8` decode / encode
+- BLACKANDWHITE_ALPHA の `GrayAlpha8` decode / encode
+- GRAYSCALE_ALPHA の `GrayAlpha8` / `GrayAlpha16` decode / encode
+- RGB_ALPHA + `maxval >= 256` の `Rgba16` decode / encode
 - `maxval >= 256` の 16-bit sample が内部 little-endian で保持されること
 - `TUPLTYPE` なしを native で読めること
 - unknown `TUPLTYPE` を native で保持できること
@@ -385,7 +389,7 @@ PAM P7 を追加する。
 - `MAXVAL` が 0 または 65536 以上のケース
 - short raster data
 - sample 値が `MAXVAL` を超えるケース
-- `GRAYSCALE_ALPHA`, `BLACKANDWHITE_ALPHA`, `RGB_ALPHA` + `maxval >= 256` の汎用 `Image` 変換を未対応として扱うこと
+- tuple type 指定と `ImageView` の `PixelFormat` が一致しない場合
 
 API候補:
 
@@ -412,10 +416,12 @@ pub enum PamTupleType {
 
 ```rust
 pam::decode(...)
+pam::decode_all(...)
 pam::decode_native(...)
 pam::decode_all_native(...)
 
-pam::encode(...)
+pam::encode(..., PamEncodeTupleType)
+pam::encode_all(..., PamEncodeTupleType)
 pam::encode_native(...)
 pam::encode_all_native(...)
 ```

@@ -26,6 +26,16 @@ pub enum PamTupleType {
     Other(String),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PamEncodeTupleType {
+    BlackAndWhite,
+    Grayscale,
+    Rgb,
+    BlackAndWhiteAlpha,
+    GrayscaleAlpha,
+    RgbAlpha,
+}
+
 impl PamImage {
     pub fn to_image(&self) -> Result<Image> {
         Image::try_from(self.clone())
@@ -80,15 +90,23 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<PamImage>> {
     Ok(images)
 }
 
-pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
-    let image = image_view_to_pam_native(image)?;
+pub fn encode<W: Write>(
+    writer: &mut W,
+    image: ImageView<'_>,
+    tuple_type: PamEncodeTupleType,
+) -> Result<()> {
+    let image = image_view_to_pam_native(image, tuple_type)?;
     encode_native(writer, &image)
 }
 
-pub fn encode_all<W: Write>(writer: &mut W, images: &[ImageView<'_>]) -> Result<()> {
+pub fn encode_all<W: Write>(
+    writer: &mut W,
+    images: &[ImageView<'_>],
+    tuple_type: PamEncodeTupleType,
+) -> Result<()> {
     let images = images
         .iter()
-        .map(|image| image_view_to_pam_native(*image))
+        .map(|image| image_view_to_pam_native(*image, tuple_type))
         .collect::<Result<Vec<_>>>()?;
 
     encode_all_native(writer, &images)
@@ -301,12 +319,12 @@ fn pam_image_to_image(image: PamImage) -> Result<Image> {
 
     match image.tuple_type {
         Some(PamTupleType::BlackAndWhite) => black_and_white_to_image(image),
+        Some(PamTupleType::BlackAndWhiteAlpha) => black_and_white_alpha_to_image(image),
         Some(PamTupleType::Grayscale) => grayscale_to_image(image),
+        Some(PamTupleType::GrayscaleAlpha) => grayscale_alpha_to_image(image),
         Some(PamTupleType::Rgb) => rgb_to_image(image),
         Some(PamTupleType::RgbAlpha) => rgba_to_image(image),
-        Some(PamTupleType::BlackAndWhiteAlpha | PamTupleType::GrayscaleAlpha)
-        | Some(PamTupleType::Other(_))
-        | None => Err(ImageError::UnsupportedFormat),
+        Some(PamTupleType::Other(_)) | None => Err(ImageError::UnsupportedFormat),
     }
 }
 
@@ -317,6 +335,15 @@ fn black_and_white_to_image(image: PamImage) -> Result<Image> {
         .map(|sample| if sample == 0 { 0 } else { 255 })
         .collect();
     Image::new(image.width, image.height, PixelFormat::Gray8, data)
+}
+
+fn black_and_white_alpha_to_image(image: PamImage) -> Result<Image> {
+    let data = image
+        .data
+        .into_iter()
+        .map(|sample| if sample == 0 { 0 } else { 255 })
+        .collect();
+    Image::new(image.width, image.height, PixelFormat::GrayAlpha8, data)
 }
 
 fn grayscale_to_image(image: PamImage) -> Result<Image> {
@@ -339,6 +366,33 @@ fn grayscale_to_image(image: PamImage) -> Result<Image> {
         data.extend_from_slice(&normalize_sample_to_u16(sample, image.maxval).to_le_bytes());
     }
     Image::new(image.width, image.height, PixelFormat::Gray16, data)
+}
+
+fn grayscale_alpha_to_image(image: PamImage) -> Result<Image> {
+    if image.maxval == u16::from(u8::MAX) {
+        return Image::new(
+            image.width,
+            image.height,
+            PixelFormat::GrayAlpha8,
+            image.data,
+        );
+    }
+
+    if image.maxval < 256 {
+        let data = image
+            .data
+            .into_iter()
+            .map(|sample| normalize_sample_to_u8(sample, image.maxval))
+            .collect();
+        return Image::new(image.width, image.height, PixelFormat::GrayAlpha8, data);
+    }
+
+    let mut data = Vec::with_capacity(image.data.len());
+    for sample in image.data.chunks_exact(2) {
+        let sample = u16::from_le_bytes([sample[0], sample[1]]);
+        data.extend_from_slice(&normalize_sample_to_u16(sample, image.maxval).to_le_bytes());
+    }
+    Image::new(image.width, image.height, PixelFormat::GrayAlpha16, data)
 }
 
 fn rgb_to_image(image: PamImage) -> Result<Image> {
@@ -377,17 +431,93 @@ fn rgba_to_image(image: PamImage) -> Result<Image> {
         return Image::new(image.width, image.height, PixelFormat::Rgba8, data);
     }
 
-    Err(ImageError::UnsupportedFormat)
+    let mut data = Vec::with_capacity(image.data.len());
+    for sample in image.data.chunks_exact(2) {
+        let sample = u16::from_le_bytes([sample[0], sample[1]]);
+        data.extend_from_slice(&normalize_sample_to_u16(sample, image.maxval).to_le_bytes());
+    }
+    Image::new(image.width, image.height, PixelFormat::Rgba16, data)
 }
 
-fn image_view_to_pam_native(image: ImageView<'_>) -> Result<PamImage> {
+fn image_view_to_pam_native(
+    image: ImageView<'_>,
+    tuple_type: PamEncodeTupleType,
+) -> Result<PamImage> {
     let image = validate_image_view(image)?;
-    let (depth, maxval, tuple_type) = match image.pixel_format {
-        PixelFormat::Gray8 => (1, u16::from(u8::MAX), PamTupleType::Grayscale),
-        PixelFormat::Gray16 => (1, u16::MAX, PamTupleType::Grayscale),
-        PixelFormat::Rgb8 => (3, u16::from(u8::MAX), PamTupleType::Rgb),
-        PixelFormat::Rgb16 => (3, u16::MAX, PamTupleType::Rgb),
-        PixelFormat::Rgba8 => (4, u16::from(u8::MAX), PamTupleType::RgbAlpha),
+    let (depth, maxval, tuple_type, data) = match tuple_type {
+        PamEncodeTupleType::BlackAndWhite => {
+            let image = require_pixel_format(image, PixelFormat::Gray8)?;
+            (
+                1,
+                1,
+                PamTupleType::BlackAndWhite,
+                black_and_white_data(image)?,
+            )
+        }
+        PamEncodeTupleType::Grayscale => match image.pixel_format {
+            PixelFormat::Gray8 => (
+                1,
+                u16::from(u8::MAX),
+                PamTupleType::Grayscale,
+                packed_image_data(image),
+            ),
+            PixelFormat::Gray16 => (
+                1,
+                u16::MAX,
+                PamTupleType::Grayscale,
+                packed_image_data(image),
+            ),
+            pixel_format => return Err(ImageError::UnsupportedPixelFormat { pixel_format }),
+        },
+        PamEncodeTupleType::Rgb => match image.pixel_format {
+            PixelFormat::Rgb8 => (
+                3,
+                u16::from(u8::MAX),
+                PamTupleType::Rgb,
+                packed_image_data(image),
+            ),
+            PixelFormat::Rgb16 => (3, u16::MAX, PamTupleType::Rgb, packed_image_data(image)),
+            pixel_format => return Err(ImageError::UnsupportedPixelFormat { pixel_format }),
+        },
+        PamEncodeTupleType::BlackAndWhiteAlpha => {
+            let image = require_pixel_format(image, PixelFormat::GrayAlpha8)?;
+            (
+                2,
+                1,
+                PamTupleType::BlackAndWhiteAlpha,
+                black_and_white_data(image)?,
+            )
+        }
+        PamEncodeTupleType::GrayscaleAlpha => match image.pixel_format {
+            PixelFormat::GrayAlpha8 => (
+                2,
+                u16::from(u8::MAX),
+                PamTupleType::GrayscaleAlpha,
+                packed_image_data(image),
+            ),
+            PixelFormat::GrayAlpha16 => (
+                2,
+                u16::MAX,
+                PamTupleType::GrayscaleAlpha,
+                packed_image_data(image),
+            ),
+            pixel_format => return Err(ImageError::UnsupportedPixelFormat { pixel_format }),
+        },
+        PamEncodeTupleType::RgbAlpha => match image.pixel_format {
+            PixelFormat::Rgba8 => (
+                4,
+                u16::from(u8::MAX),
+                PamTupleType::RgbAlpha,
+                packed_image_data(image),
+            ),
+            PixelFormat::Rgba16 => (
+                4,
+                u16::MAX,
+                PamTupleType::RgbAlpha,
+                packed_image_data(image),
+            ),
+            pixel_format => return Err(ImageError::UnsupportedPixelFormat { pixel_format }),
+        },
     };
 
     Ok(PamImage {
@@ -396,8 +526,37 @@ fn image_view_to_pam_native(image: ImageView<'_>) -> Result<PamImage> {
         depth,
         maxval,
         tuple_type: Some(tuple_type),
-        data: packed_image_data(image),
+        data,
     })
+}
+
+fn require_pixel_format(image: ImageView<'_>, pixel_format: PixelFormat) -> Result<ImageView<'_>> {
+    if image.pixel_format != pixel_format {
+        return Err(ImageError::UnsupportedPixelFormat {
+            pixel_format: image.pixel_format,
+        });
+    }
+    Ok(image)
+}
+
+fn black_and_white_data(image: ImageView<'_>) -> Result<Vec<u8>> {
+    let mut data = Vec::with_capacity(image.width as usize * image.height as usize);
+
+    for row in image_rows(image) {
+        for sample in row {
+            match *sample {
+                0 => data.push(0),
+                255 => data.push(1),
+                _ => {
+                    return Err(ImageError::InvalidData {
+                        reason: "black-and-white PAM conversion requires samples to be 0 or 255",
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(data)
 }
 
 fn validate_pam_image(image: &PamImage) -> Result<()> {
@@ -496,6 +655,16 @@ fn packed_image_data(image: ImageView<'_>) -> Vec<u8> {
     }
 
     data
+}
+
+fn image_rows(image: ImageView<'_>) -> impl Iterator<Item = &'_ [u8]> {
+    let row_len = image.width as usize * image.pixel_format.bytes_per_pixel();
+
+    (0..image.height as usize).map(move |row| {
+        let start = row * image.stride;
+        let end = start + row_len;
+        &image.data[start..end]
+    })
 }
 
 fn validate_8_bit_samples(data: &[u8], maxval: u16) -> Result<()> {
@@ -797,8 +966,7 @@ mod tests {
 
     #[test]
     fn decode_all_rejects_unsupported_image_conversion() {
-        let input =
-            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 2\nMAXVAL 255\nTUPLTYPE GRAYSCALE_ALPHA\nENDHDR\n\x80\xff";
+        let input = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 1\nMAXVAL 255\nTUPLTYPE HEIGHTMAP\nENDHDR\n\x80";
         let error = decode_all(&mut Cursor::new(input)).unwrap_err();
 
         assert_eq!(error, ImageError::UnsupportedFormat);
@@ -845,17 +1013,38 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_unknown_tuple_type_for_image_conversion() {
-        let input = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 1\nMAXVAL 255\nTUPLTYPE HEIGHTMAP\nENDHDR\n\x80";
-        let error = decode(&mut Cursor::new(input)).unwrap_err();
+    fn decode_converts_black_and_white_alpha_to_gray_alpha8() {
+        let input =
+            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 2\nMAXVAL 1\nTUPLTYPE BLACKANDWHITE_ALPHA\nENDHDR\n\x01\0";
+        let image = decode(&mut Cursor::new(input)).unwrap();
 
-        assert_eq!(error, ImageError::UnsupportedFormat);
+        assert_eq!(image.pixel_format, PixelFormat::GrayAlpha8);
+        assert_eq!(image.data, [255, 0]);
     }
 
     #[test]
-    fn decode_rejects_grayscale_alpha_for_image_conversion() {
+    fn decode_converts_grayscale_alpha_to_gray_alpha16() {
         let input =
-            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 2\nMAXVAL 255\nTUPLTYPE GRAYSCALE_ALPHA\nENDHDR\n\x80\xff";
+            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 2\nMAXVAL 1000\nTUPLTYPE GRAYSCALE_ALPHA\nENDHDR\n\x03\xe8\x01\xf4";
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::GrayAlpha16);
+        assert_eq!(image.data, [0xff, 0xff, 0x00, 0x80]);
+    }
+
+    #[test]
+    fn decode_converts_rgb_alpha_to_rgba16() {
+        let input =
+            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 4\nMAXVAL 1000\nTUPLTYPE RGB_ALPHA\nENDHDR\n\x03\xe8\x01\xf4\0\0\x03\xe8";
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Rgba16);
+        assert_eq!(image.data, [0xff, 0xff, 0x00, 0x80, 0, 0, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn decode_rejects_unknown_tuple_type_for_image_conversion() {
+        let input = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 1\nMAXVAL 255\nTUPLTYPE HEIGHTMAP\nENDHDR\n\x80";
         let error = decode(&mut Cursor::new(input)).unwrap_err();
 
         assert_eq!(error, ImageError::UnsupportedFormat);
@@ -867,7 +1056,7 @@ mod tests {
         let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
         let mut output = Vec::new();
 
-        encode(&mut output, image).unwrap();
+        encode(&mut output, image, PamEncodeTupleType::Rgb).unwrap();
 
         assert_eq!(
             output,
@@ -881,11 +1070,81 @@ mod tests {
         let image = ImageView::new(1, 1, PixelFormat::Rgba8, 4, &data).unwrap();
         let mut output = Vec::new();
 
-        encode(&mut output, image).unwrap();
+        encode(&mut output, image, PamEncodeTupleType::RgbAlpha).unwrap();
 
         assert_eq!(
             output,
             b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n\xff\0\x80\x40"
+        );
+    }
+
+    #[test]
+    fn encode_writes_gray8_image_as_black_and_white_pam() {
+        let data = [0, 255];
+        let image = ImageView::new(2, 1, PixelFormat::Gray8, 2, &data).unwrap();
+        let mut output = Vec::new();
+
+        encode(&mut output, image, PamEncodeTupleType::BlackAndWhite).unwrap();
+
+        assert_eq!(
+            output,
+            b"P7\nWIDTH 2\nHEIGHT 1\nDEPTH 1\nMAXVAL 1\nTUPLTYPE BLACKANDWHITE\nENDHDR\n\0\x01"
+        );
+    }
+
+    #[test]
+    fn encode_writes_gray_alpha16_image_as_grayscale_alpha_pam() {
+        let data = [0x34, 0x12, 0xff, 0xff];
+        let image = ImageView::new(1, 1, PixelFormat::GrayAlpha16, 4, &data).unwrap();
+        let mut output = Vec::new();
+
+        encode(&mut output, image, PamEncodeTupleType::GrayscaleAlpha).unwrap();
+
+        assert_eq!(
+            output,
+            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 2\nMAXVAL 65535\nTUPLTYPE GRAYSCALE_ALPHA\nENDHDR\n\x12\x34\xff\xff"
+        );
+    }
+
+    #[test]
+    fn encode_writes_rgba16_image_as_rgb_alpha_pam() {
+        let data = [0x34, 0x12, 0x78, 0x56, 0xff, 0xff, 0, 0];
+        let image = ImageView::new(1, 1, PixelFormat::Rgba16, 8, &data).unwrap();
+        let mut output = Vec::new();
+
+        encode(&mut output, image, PamEncodeTupleType::RgbAlpha).unwrap();
+
+        assert_eq!(
+            output,
+            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 4\nMAXVAL 65535\nTUPLTYPE RGB_ALPHA\nENDHDR\n\x12\x34\x56\x78\xff\xff\0\0"
+        );
+    }
+
+    #[test]
+    fn encode_rejects_non_black_and_white_samples() {
+        let data = [128];
+        let image = ImageView::new(1, 1, PixelFormat::Gray8, 1, &data).unwrap();
+        let error = encode(&mut Vec::new(), image, PamEncodeTupleType::BlackAndWhite).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "black-and-white PAM conversion requires samples to be 0 or 255"
+            }
+        );
+    }
+
+    #[test]
+    fn encode_rejects_pixel_format_not_matching_tuple_type() {
+        let data = [255, 0, 128];
+        let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
+        let error = encode(&mut Vec::new(), image, PamEncodeTupleType::Grayscale).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::UnsupportedPixelFormat {
+                pixel_format: PixelFormat::Rgb8
+            }
         );
     }
 
@@ -899,7 +1158,7 @@ mod tests {
         ];
         let mut output = Vec::new();
 
-        encode_all(&mut output, &images).unwrap();
+        encode_all(&mut output, &images, PamEncodeTupleType::Rgb).unwrap();
 
         assert_eq!(
             decode_all(&mut Cursor::new(output)).unwrap(),
@@ -920,7 +1179,7 @@ mod tests {
             data: &[],
         };
         let mut output = Vec::new();
-        let error = encode_all(&mut output, &[image]).unwrap_err();
+        let error = encode_all(&mut output, &[image], PamEncodeTupleType::Rgb).unwrap_err();
 
         assert_eq!(
             error,
