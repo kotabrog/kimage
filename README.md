@@ -22,6 +22,7 @@ Supported:
 - PGM/PPM samples normalized to `Gray16` / `Rgb16` for `maxval >= 256`
 - native PGM/PPM APIs that preserve `maxval` and sample values
 - conversion APIs between `NetpbmImage` and `Image` / `ImageView`
+- PNM decode APIs that auto-detect P1 through P6 and encode APIs that select P1 through P6
 - native multi-image streams for binary PBM P4, PGM P5, and PPM P6
 
 Unsupported:
@@ -123,6 +124,16 @@ cargo run --example ppm_multi_image_roundtrip
 ```
 
 The example writes `target/examples/ppm_multi_image_roundtrip.ppm`.
+
+### PNM
+
+Run the PNM roundtrip example to write and read back a small RGB gradient image using PPM P6 output:
+
+```sh
+cargo run --example pnm_roundtrip
+```
+
+The example writes `target/examples/pnm_roundtrip.ppm`.
 
 ### BMP
 

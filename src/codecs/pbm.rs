@@ -1,8 +1,9 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    Dimensions, HeaderParser, NetpbmImage, read_bitmap_header, reject_trailing_tokens,
-    validate_image_view, write_bitmap_header, write_bitmap_header_dimensions,
+    Dimensions, HeaderParser, NetpbmImage, gray_image_to_pbm_native, read_bitmap_header,
+    reject_trailing_tokens, validate_image_view, write_bitmap_header,
+    write_bitmap_header_dimensions,
 };
 use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
@@ -223,6 +224,16 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
     }
 
     Ok(())
+}
+
+/// Encodes image views as a binary PBM P4 multi-image stream.
+pub fn encode_all<W: Write>(writer: &mut W, images: &[ImageView<'_>]) -> Result<()> {
+    let images = images
+        .iter()
+        .map(|image| gray_image_to_pbm_native(*image))
+        .collect::<Result<Vec<_>>>()?;
+
+    encode_all_native(writer, &images)
 }
 
 /// Encodes native PBM images as a binary PBM P4 multi-image stream.
@@ -634,6 +645,61 @@ mod tests {
 
         encode_all_native(&mut output, &[]).unwrap();
 
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_writes_empty_stream_for_empty_slice() {
+        let mut output = Vec::new();
+
+        encode_all(&mut output, &[]).unwrap();
+
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_writes_pbm_p4_multi_image_stream() {
+        let first_data = [255, 0, 255];
+        let second_data = [0, 0];
+        let images = [
+            ImageView::new(3, 1, PixelFormat::Gray8, 3, &first_data).unwrap(),
+            ImageView::new(2, 1, PixelFormat::Gray8, 2, &second_data).unwrap(),
+        ];
+        let expected = [
+            NetpbmImage::Pbm {
+                width: 3,
+                height: 1,
+                data: vec![0, 1, 0],
+            },
+            NetpbmImage::Pbm {
+                width: 2,
+                height: 1,
+                data: vec![1, 1],
+            },
+        ];
+        let mut output = Vec::new();
+
+        encode_all(&mut output, &images).unwrap();
+
+        assert_eq!(
+            decode_all_native(&mut Cursor::new(output)).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn encode_all_rejects_invalid_sample_without_writing() {
+        let data = [128];
+        let image = ImageView::new(1, 1, PixelFormat::Gray8, 1, &data).unwrap();
+        let mut output = Vec::new();
+        let error = encode_all(&mut output, &[image]).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "PBM conversion requires Gray8 samples to be 0 or 255"
+            }
+        );
         assert!(output.is_empty());
     }
 
