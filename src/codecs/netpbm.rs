@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use crate::{ImageError, ImageView, PixelFormat, Result};
+use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
 pub(crate) const MAX_SUPPORTED_VALUE: u32 = 65_535;
 
@@ -29,6 +29,176 @@ pub enum NetpbmImage {
         maxval: u16,
         data: Vec<u8>,
     },
+}
+
+impl NetpbmImage {
+    /// Converts this native Netpbm image into the generic normalized image buffer.
+    pub fn to_image(&self) -> Result<Image> {
+        netpbm_image_to_image(self.clone())
+    }
+}
+
+impl TryFrom<NetpbmImage> for Image {
+    type Error = ImageError;
+
+    fn try_from(image: NetpbmImage) -> Result<Self> {
+        netpbm_image_to_image(image)
+    }
+}
+
+/// Converts a grayscale image view into a native PGM image.
+pub fn gray_image_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
+    let maxval = match image.pixel_format {
+        PixelFormat::Gray8 => u16::from(u8::MAX),
+        PixelFormat::Gray16 => u16::MAX,
+        pixel_format => return Err(ImageError::UnsupportedPixelFormat { pixel_format }),
+    };
+    let image = validate_image_view(image, image.pixel_format)?;
+
+    Ok(NetpbmImage::Pgm {
+        width: image.width,
+        height: image.height,
+        maxval,
+        data: packed_image_data(image),
+    })
+}
+
+/// Converts an RGB image view into a native PPM image.
+pub fn rgb_image_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
+    let maxval = match image.pixel_format {
+        PixelFormat::Rgb8 => u16::from(u8::MAX),
+        PixelFormat::Rgb16 => u16::MAX,
+        pixel_format => return Err(ImageError::UnsupportedPixelFormat { pixel_format }),
+    };
+    let image = validate_image_view(image, image.pixel_format)?;
+
+    Ok(NetpbmImage::Ppm {
+        width: image.width,
+        height: image.height,
+        maxval,
+        data: packed_image_data(image),
+    })
+}
+
+/// Converts a black-and-white `Gray8` image view into a native PBM image.
+pub fn gray_image_to_pbm_native(image: ImageView<'_>) -> Result<NetpbmImage> {
+    let image = validate_image_view(image, PixelFormat::Gray8)?;
+    let mut data = Vec::with_capacity(image.width as usize * image.height as usize);
+
+    for row in image_rows(image) {
+        for sample in row {
+            match *sample {
+                255 => data.push(0),
+                0 => data.push(1),
+                _ => {
+                    return Err(ImageError::InvalidData {
+                        reason: "PBM conversion requires Gray8 samples to be 0 or 255",
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(NetpbmImage::Pbm {
+        width: image.width,
+        height: image.height,
+        data,
+    })
+}
+
+fn netpbm_image_to_image(image: NetpbmImage) -> Result<Image> {
+    match image {
+        NetpbmImage::Pbm {
+            width,
+            height,
+            data,
+        } => {
+            let pixels = data
+                .into_iter()
+                .map(|sample| if sample == 0 { 255 } else { 0 })
+                .collect();
+            Image::new(width, height, PixelFormat::Gray8, pixels)
+        }
+        NetpbmImage::Pgm {
+            width,
+            height,
+            maxval,
+            data,
+        } => pgm_native_to_image(width, height, maxval, data),
+        NetpbmImage::Ppm {
+            width,
+            height,
+            maxval,
+            data,
+        } => ppm_native_to_image(width, height, maxval, data),
+    }
+}
+
+fn pgm_native_to_image(width: u32, height: u32, maxval: u16, data: Vec<u8>) -> Result<Image> {
+    if maxval == u16::from(u8::MAX) {
+        return Image::new(width, height, PixelFormat::Gray8, data);
+    }
+
+    if maxval < 256 {
+        let data = data
+            .into_iter()
+            .map(|sample| normalize_sample_to_u8(sample, maxval))
+            .collect();
+
+        return Image::new(width, height, PixelFormat::Gray8, data);
+    }
+
+    let mut normalized = Vec::with_capacity(data.len());
+    for sample in data.chunks_exact(2) {
+        let sample = u16::from_le_bytes([sample[0], sample[1]]);
+        normalized.extend_from_slice(&normalize_sample_to_u16(sample, maxval).to_le_bytes());
+    }
+
+    Image::new(width, height, PixelFormat::Gray16, normalized)
+}
+
+fn ppm_native_to_image(width: u32, height: u32, maxval: u16, data: Vec<u8>) -> Result<Image> {
+    if maxval == u16::from(u8::MAX) {
+        return Image::new(width, height, PixelFormat::Rgb8, data);
+    }
+
+    if maxval < 256 {
+        let data = data
+            .into_iter()
+            .map(|sample| normalize_sample_to_u8(sample, maxval))
+            .collect();
+
+        return Image::new(width, height, PixelFormat::Rgb8, data);
+    }
+
+    let mut normalized = Vec::with_capacity(data.len());
+    for sample in data.chunks_exact(2) {
+        let sample = u16::from_le_bytes([sample[0], sample[1]]);
+        normalized.extend_from_slice(&normalize_sample_to_u16(sample, maxval).to_le_bytes());
+    }
+
+    Image::new(width, height, PixelFormat::Rgb16, normalized)
+}
+
+fn packed_image_data(image: ImageView<'_>) -> Vec<u8> {
+    let row_len = image.width as usize * image.pixel_format.bytes_per_pixel();
+    let mut data = Vec::with_capacity(row_len * image.height as usize);
+
+    for row in image_rows(image) {
+        data.extend_from_slice(row);
+    }
+
+    data
+}
+
+fn image_rows(image: ImageView<'_>) -> impl Iterator<Item = &'_ [u8]> {
+    let row_len = image.width as usize * image.pixel_format.bytes_per_pixel();
+
+    (0..image.height as usize).map(move |row| {
+        let start = row * image.stride;
+        let end = start + row_len;
+        &image.data[start..end]
+    })
 }
 
 pub(crate) struct HeaderParser<'a> {
@@ -387,6 +557,201 @@ fn is_whitespace(byte: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn netpbm_image_to_image_converts_pbm_to_gray8() {
+        let image = NetpbmImage::Pbm {
+            width: 2,
+            height: 1,
+            data: vec![0, 1],
+        }
+        .to_image()
+        .unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 1);
+        assert_eq!(image.pixel_format, PixelFormat::Gray8);
+        assert_eq!(image.data, [255, 0]);
+    }
+
+    #[test]
+    fn netpbm_image_to_image_normalizes_pgm_to_gray8() {
+        let image = Image::try_from(NetpbmImage::Pgm {
+            width: 4,
+            height: 1,
+            maxval: 15,
+            data: vec![0, 5, 10, 15],
+        })
+        .unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Gray8);
+        assert_eq!(image.data, [0, 85, 170, 255]);
+    }
+
+    #[test]
+    fn netpbm_image_to_image_normalizes_pgm_to_gray16() {
+        let image = Image::try_from(NetpbmImage::Pgm {
+            width: 2,
+            height: 1,
+            maxval: 1000,
+            data: vec![0xe8, 0x03, 0xf4, 0x01],
+        })
+        .unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Gray16);
+        assert_eq!(image.data, [0xff, 0xff, 0x00, 0x80]);
+    }
+
+    #[test]
+    fn netpbm_image_to_image_normalizes_ppm_to_rgb8() {
+        let image = Image::try_from(NetpbmImage::Ppm {
+            width: 2,
+            height: 1,
+            maxval: 15,
+            data: vec![15, 0, 5, 0, 10, 15],
+        })
+        .unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 85, 0, 170, 255]);
+    }
+
+    #[test]
+    fn netpbm_image_to_image_normalizes_ppm_to_rgb16() {
+        let image = Image::try_from(NetpbmImage::Ppm {
+            width: 1,
+            height: 1,
+            maxval: 1000,
+            data: vec![0xe8, 0x03, 0xf4, 0x01, 0x00, 0x00],
+        })
+        .unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Rgb16);
+        assert_eq!(image.data, [0xff, 0xff, 0x00, 0x80, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn gray_image_to_pgm_native_converts_gray8() {
+        let data = [0, 255];
+        let image = ImageView::new(2, 1, PixelFormat::Gray8, 2, &data).unwrap();
+
+        assert_eq!(
+            gray_image_to_pgm_native(image).unwrap(),
+            NetpbmImage::Pgm {
+                width: 2,
+                height: 1,
+                maxval: 255,
+                data: vec![0, 255]
+            }
+        );
+    }
+
+    #[test]
+    fn gray_image_to_pgm_native_converts_gray16() {
+        let data = [0x34, 0x12, 0xff, 0xff];
+        let image = ImageView::new(2, 1, PixelFormat::Gray16, 4, &data).unwrap();
+
+        assert_eq!(
+            gray_image_to_pgm_native(image).unwrap(),
+            NetpbmImage::Pgm {
+                width: 2,
+                height: 1,
+                maxval: 65535,
+                data: vec![0x34, 0x12, 0xff, 0xff]
+            }
+        );
+    }
+
+    #[test]
+    fn rgb_image_to_ppm_native_converts_rgb8() {
+        let data = [255, 0, 0, 0, 255, 0];
+        let image = ImageView::new(2, 1, PixelFormat::Rgb8, 6, &data).unwrap();
+
+        assert_eq!(
+            rgb_image_to_ppm_native(image).unwrap(),
+            NetpbmImage::Ppm {
+                width: 2,
+                height: 1,
+                maxval: 255,
+                data: vec![255, 0, 0, 0, 255, 0]
+            }
+        );
+    }
+
+    #[test]
+    fn rgb_image_to_ppm_native_converts_rgb16() {
+        let data = [0x34, 0x12, 0x78, 0x56, 0xff, 0xff];
+        let image = ImageView::new(1, 1, PixelFormat::Rgb16, 6, &data).unwrap();
+
+        assert_eq!(
+            rgb_image_to_ppm_native(image).unwrap(),
+            NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 65535,
+                data: vec![0x34, 0x12, 0x78, 0x56, 0xff, 0xff]
+            }
+        );
+    }
+
+    #[test]
+    fn gray_image_to_pbm_native_converts_black_and_white_gray8() {
+        let data = [255, 0, 255, 0];
+        let image = ImageView::new(2, 2, PixelFormat::Gray8, 2, &data).unwrap();
+
+        assert_eq!(
+            gray_image_to_pbm_native(image).unwrap(),
+            NetpbmImage::Pbm {
+                width: 2,
+                height: 2,
+                data: vec![0, 1, 0, 1]
+            }
+        );
+    }
+
+    #[test]
+    fn gray_image_to_pbm_native_rejects_intermediate_gray8() {
+        let data = [128];
+        let image = ImageView::new(1, 1, PixelFormat::Gray8, 1, &data).unwrap();
+        let error = gray_image_to_pbm_native(image).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "PBM conversion requires Gray8 samples to be 0 or 255"
+            }
+        );
+    }
+
+    #[test]
+    fn image_to_native_conversion_packs_strided_rows() {
+        let data = [0, 99, 255, 88];
+        let image = ImageView::new(1, 2, PixelFormat::Gray8, 2, &data).unwrap();
+
+        assert_eq!(
+            gray_image_to_pgm_native(image).unwrap(),
+            NetpbmImage::Pgm {
+                width: 1,
+                height: 2,
+                maxval: 255,
+                data: vec![0, 255]
+            }
+        );
+    }
+
+    #[test]
+    fn image_to_native_conversion_rejects_unsupported_pixel_format() {
+        let data = [0, 0, 0, 255];
+        let image = ImageView::new(1, 1, PixelFormat::Rgba8, 4, &data).unwrap();
+        let error = rgb_image_to_ppm_native(image).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::UnsupportedPixelFormat {
+                pixel_format: PixelFormat::Rgba8
+            }
+        );
+    }
 
     #[test]
     fn next_token_skips_whitespace_and_comments() {

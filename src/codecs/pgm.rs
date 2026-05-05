@@ -1,9 +1,9 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, NetpbmImage, normalize_sample_to_u8, normalize_sample_to_u16, raster_slice,
-    read_any_sample_header, read_ascii_sample_bytes_with_max_value, validate_image_view,
-    write_packed_rows, write_sample_header_with_max_value,
+    HeaderParser, NetpbmImage, raster_slice, read_any_sample_header,
+    read_ascii_sample_bytes_with_max_value, validate_image_view, write_packed_rows,
+    write_sample_header_with_max_value,
 };
 use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
@@ -14,7 +14,7 @@ const ASCII_MAGIC: &[u8] = b"P2";
 ///
 /// This implementation normalizes PGM samples to `PixelFormat::Gray8` or `PixelFormat::Gray16`.
 pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
-    pgm_native_to_image(decode_native(reader)?)
+    Image::try_from(decode_native(reader)?)
 }
 
 /// Decodes a binary PGM P5 image while preserving its max value.
@@ -66,7 +66,7 @@ fn decode_one_native(data: &[u8], parser: &mut HeaderParser<'_>) -> Result<Netpb
 ///
 /// This implementation normalizes PGM samples to `PixelFormat::Gray8` or `PixelFormat::Gray16`.
 pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
-    pgm_native_to_image(decode_ascii_native(reader)?)
+    Image::try_from(decode_ascii_native(reader)?)
 }
 
 /// Decodes an ASCII PGM P2 image while preserving its max value.
@@ -173,39 +173,6 @@ pub fn encode_ascii_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Res
     }
 
     Ok(())
-}
-
-fn pgm_native_to_image(image: NetpbmImage) -> Result<Image> {
-    let NetpbmImage::Pgm {
-        width,
-        height,
-        maxval,
-        data,
-    } = image
-    else {
-        return Err(ImageError::UnsupportedFormat);
-    };
-
-    if maxval == u16::from(u8::MAX) {
-        return Image::new(width, height, PixelFormat::Gray8, data);
-    }
-
-    if maxval < 256 {
-        let data = data
-            .into_iter()
-            .map(|sample| normalize_sample_to_u8(sample, maxval))
-            .collect();
-
-        return Image::new(width, height, PixelFormat::Gray8, data);
-    }
-
-    let mut normalized = Vec::with_capacity(data.len());
-    for sample in data.chunks_exact(2) {
-        let sample = u16::from_le_bytes([sample[0], sample[1]]);
-        normalized.extend_from_slice(&normalize_sample_to_u16(sample, maxval).to_le_bytes());
-    }
-
-    Image::new(width, height, PixelFormat::Gray16, normalized)
 }
 
 fn validate_native_pgm_image(image: &NetpbmImage) -> Result<(u32, u32, u16, &[u8])> {
