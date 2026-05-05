@@ -3,7 +3,10 @@ use std::io::BufReader;
 use std::path::Path;
 use std::process::Command;
 
-use kimage::{ImageView, PixelFormat, codecs::pam};
+use kimage::{
+    ImageView, PixelFormat,
+    codecs::pam::{self, PamEncodeTupleType},
+};
 
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 64;
@@ -21,7 +24,7 @@ fn main() -> kimage::Result<()> {
     }
 
     let mut file = File::create(path)?;
-    pam::encode(&mut file, image)?;
+    pam::encode(&mut file, image, PamEncodeTupleType::Rgb)?;
     drop(file);
 
     let file = File::open(path)?;

@@ -32,12 +32,11 @@ Supported:
 - PAM P7 native decode and encode
 - PAM P7 native multi-image streams
 - `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, `RGB_ALPHA`, and unknown `TUPLTYPE` in native APIs
-- `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, and 8-bit `RGB_ALPHA` conversion to `Image`
+- `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, and `RGB_ALPHA` conversion to `Image`
+- explicit PAM tuple type selection for `ImageView` encode
 
 Unsupported:
 
-- `BLACKANDWHITE_ALPHA` / `GRAYSCALE_ALPHA` conversion to `Image`
-- 16-bit `RGB_ALPHA` conversion to `Image`
 - unknown or missing `TUPLTYPE` conversion to `Image`
 
 ### BMP

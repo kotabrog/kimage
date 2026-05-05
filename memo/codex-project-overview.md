@@ -79,9 +79,12 @@ pub struct ImageView<'a> {
 pub enum PixelFormat {
     Gray8,
     Gray16,
+    GrayAlpha8,
+    GrayAlpha16,
     Rgb8,
     Rgb16,
     Rgba8,
+    Rgba16,
 }
 ```
 
@@ -127,7 +130,7 @@ PAM P7 は、PBM / PGM / PPM とは別の P7 形式として扱う。PAM は任�
 
 PAM の 16-bit sample は PGM / PPM と同様に、ファイル上は big-endian、内部 `data` は little-endian に統一する。
 
-alpha 付き tuple type は段階的に扱う。まず `RGB_ALPHA` + `maxval < 256` は既存の `Rgba8` へ変換可能とする。`GRAYSCALE_ALPHA`, `BLACKANDWHITE_ALPHA`, `RGB_ALPHA` + `maxval >= 256` は、`GrayAlpha8` / `GrayAlpha16` / `Rgba16` などの `PixelFormat` 追加が必要になるため、native 対応を先に行い、汎用 `Image` 変換は別タスクで検討する。
+alpha 付き tuple type を汎用 `Image` でも扱うため、`PixelFormat` に `GrayAlpha8`, `GrayAlpha16`, `Rgba16` を追加する。PAM の `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, `RGB_ALPHA` は、tuple type と `DEPTH` が仕様上期待される値と一致する場合に `Image` へ変換できるようにする。
 
 ## モジュール構成
 
@@ -187,7 +190,8 @@ src/
 - PAM sample は `maxval < 256` なら1 byte、`maxval >= 256` なら2 bytes big-endian。
 - PAM の `TUPLTYPE` は複数行を連結でき、未指定の場合は空文字列として扱う。
 - `decode_native` / `encode_native` では unknown `TUPLTYPE` も保持可能にする。
-- `decode` / `encode` は `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `RGB_ALPHA` のうち既存 `PixelFormat` に変換できる範囲から対応する。
+- `decode` は `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, `RGB_ALPHA` のうち意味が明確な visual tuple type を汎用 `Image` に変換する。
+- `encode` は `PamEncodeTupleType` で tuple type を明示指定し、`ImageView` の `PixelFormat` と一致する場合のみ書き出す。
 - PAM の `DEPTH` は仕様上 tuple type と独立だが、このクレートの初期実装では対応 tuple type の期待 depth と一致必須にする。
 
 ## 後回しにするもの

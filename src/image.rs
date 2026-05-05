@@ -5,9 +5,12 @@ use crate::{ImageError, Result};
 pub enum PixelFormat {
     Gray8,
     Gray16,
+    GrayAlpha8,
+    GrayAlpha16,
     Rgb8,
     Rgb16,
     Rgba8,
+    Rgba16,
 }
 
 impl PixelFormat {
@@ -16,9 +19,12 @@ impl PixelFormat {
         match self {
             Self::Gray8 => 1,
             Self::Gray16 => 1,
+            Self::GrayAlpha8 => 2,
+            Self::GrayAlpha16 => 2,
             Self::Rgb8 => 3,
             Self::Rgb16 => 3,
             Self::Rgba8 => 4,
+            Self::Rgba16 => 4,
         }
     }
 
@@ -27,9 +33,12 @@ impl PixelFormat {
         match self {
             Self::Gray8 => 1,
             Self::Gray16 => 2,
+            Self::GrayAlpha8 => 2,
+            Self::GrayAlpha16 => 4,
             Self::Rgb8 => 3,
             Self::Rgb16 => 6,
             Self::Rgba8 => 4,
+            Self::Rgba16 => 8,
         }
     }
 }
@@ -168,18 +177,24 @@ mod tests {
     fn pixel_format_channels_returns_channel_count() {
         assert_eq!(PixelFormat::Gray8.channels(), 1);
         assert_eq!(PixelFormat::Gray16.channels(), 1);
+        assert_eq!(PixelFormat::GrayAlpha8.channels(), 2);
+        assert_eq!(PixelFormat::GrayAlpha16.channels(), 2);
         assert_eq!(PixelFormat::Rgb8.channels(), 3);
         assert_eq!(PixelFormat::Rgb16.channels(), 3);
         assert_eq!(PixelFormat::Rgba8.channels(), 4);
+        assert_eq!(PixelFormat::Rgba16.channels(), 4);
     }
 
     #[test]
     fn pixel_format_bytes_per_pixel_returns_byte_count() {
         assert_eq!(PixelFormat::Gray8.bytes_per_pixel(), 1);
         assert_eq!(PixelFormat::Gray16.bytes_per_pixel(), 2);
+        assert_eq!(PixelFormat::GrayAlpha8.bytes_per_pixel(), 2);
+        assert_eq!(PixelFormat::GrayAlpha16.bytes_per_pixel(), 4);
         assert_eq!(PixelFormat::Rgb8.bytes_per_pixel(), 3);
         assert_eq!(PixelFormat::Rgb16.bytes_per_pixel(), 6);
         assert_eq!(PixelFormat::Rgba8.bytes_per_pixel(), 4);
+        assert_eq!(PixelFormat::Rgba16.bytes_per_pixel(), 8);
     }
 
     #[test]
