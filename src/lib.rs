@@ -3,7 +3,7 @@
 pub mod codecs;
 mod error;
 mod image;
-pub mod io;
+mod io;
 
 pub use error::{ImageError, Result};
 pub use image::{Image, ImageView, PixelFormat};
