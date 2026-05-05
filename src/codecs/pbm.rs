@@ -8,15 +8,12 @@ use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
 const ASCII_MAGIC: &[u8] = b"P1";
 const BINARY_MAGIC: &[u8] = b"P4";
-const WHITE: u8 = 255;
-const BLACK: u8 = 0;
-
 /// Decodes an ASCII PBM P1 image.
 ///
 /// PBM samples are expanded to `PixelFormat::Gray8`, where `0` is black and
 /// `255` is white.
 pub fn decode_ascii<R: Read>(reader: &mut R) -> Result<Image> {
-    pbm_native_to_image(decode_ascii_native(reader)?)
+    Image::try_from(decode_ascii_native(reader)?)
 }
 
 /// Decodes an ASCII PBM P1 image without normalizing PBM sample values.
@@ -49,7 +46,7 @@ pub fn decode_ascii_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
 /// PBM bits are expanded to `PixelFormat::Gray8`, where `0` is black and `255`
 /// is white.
 pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
-    pbm_native_to_image(decode_native(reader)?)
+    Image::try_from(decode_native(reader)?)
 }
 
 /// Decodes a binary PBM P4 image without normalizing PBM bit values.
@@ -291,26 +288,8 @@ fn validate_pbm_sample(sample: u32) -> Result<u8> {
     }
 }
 
-fn pbm_sample_to_gray8(sample: u8) -> u8 {
-    if sample == 0 { WHITE } else { BLACK }
-}
-
 fn gray8_to_pbm_sample(sample: u8) -> u32 {
     if sample < 128 { 1 } else { 0 }
-}
-
-fn pbm_native_to_image(image: NetpbmImage) -> Result<Image> {
-    let NetpbmImage::Pbm {
-        width,
-        height,
-        data,
-    } = image
-    else {
-        return Err(ImageError::UnsupportedFormat);
-    };
-
-    let pixels = data.into_iter().map(pbm_sample_to_gray8).collect();
-    Image::new(width, height, PixelFormat::Gray8, pixels)
 }
 
 fn validate_native_pbm_image(image: &NetpbmImage) -> Result<(u32, u32, &[u8])> {
