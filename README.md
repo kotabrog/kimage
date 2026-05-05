@@ -25,9 +25,20 @@ Supported:
 - PNM decode APIs that auto-detect P1 through P6 and encode APIs that select P1 through P6
 - native multi-image streams for binary PBM P4, PGM P5, and PPM P6
 
+### PAM
+
+Supported:
+
+- PAM P7 native decode and encode
+- PAM P7 native multi-image streams
+- `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, `RGB_ALPHA`, and unknown `TUPLTYPE` in native APIs
+- `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, and 8-bit `RGB_ALPHA` conversion to `Image`
+
 Unsupported:
 
-- PAM P7
+- `BLACKANDWHITE_ALPHA` / `GRAYSCALE_ALPHA` conversion to `Image`
+- 16-bit `RGB_ALPHA` conversion to `Image`
+- unknown or missing `TUPLTYPE` conversion to `Image`
 
 ### BMP
 
@@ -134,6 +145,16 @@ cargo run --example pnm_roundtrip
 ```
 
 The example writes `target/examples/pnm_roundtrip.ppm`.
+
+### PAM
+
+Run the PAM P7 roundtrip example to write and read back a small RGB gradient image:
+
+```sh
+cargo run --example pam_roundtrip
+```
+
+The example writes `target/examples/pam_roundtrip.pam`.
 
 ### BMP
 
