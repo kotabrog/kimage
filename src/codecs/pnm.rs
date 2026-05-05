@@ -76,6 +76,22 @@ pub fn encode<W: Write>(
     }
 }
 
+/// Encodes image views as a binary PBM, PGM, or PPM multi-image stream.
+pub fn encode_all<W: Write>(
+    writer: &mut W,
+    images: &[ImageView<'_>],
+    format: PnmEncodeFormat,
+) -> Result<()> {
+    match format {
+        PnmEncodeFormat::PbmBinary => pbm::encode_all(writer, images),
+        PnmEncodeFormat::PgmBinary => pgm::encode_all(writer, images),
+        PnmEncodeFormat::PpmBinary => ppm::encode_all(writer, images),
+        PnmEncodeFormat::PbmAscii | PnmEncodeFormat::PgmAscii | PnmEncodeFormat::PpmAscii => {
+            Err(ImageError::UnsupportedFormat)
+        }
+    }
+}
+
 /// Encodes a native Netpbm image as binary PBM, PGM, or PPM.
 pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()> {
     match image {
@@ -405,6 +421,57 @@ mod tests {
                 pixel_format: PixelFormat::Rgb8
             }
         );
+    }
+
+    #[test]
+    fn encode_all_writes_empty_stream_for_empty_slice() {
+        let mut output = Vec::new();
+
+        encode_all(&mut output, &[], PnmEncodeFormat::PpmBinary).unwrap();
+
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_writes_ppm_p6_multi_image_stream() {
+        let first_data = [0, 0, 0];
+        let second_data = [255, 255, 255];
+        let images = [
+            ImageView::new(1, 1, PixelFormat::Rgb8, 3, &first_data).unwrap(),
+            ImageView::new(1, 1, PixelFormat::Rgb8, 3, &second_data).unwrap(),
+        ];
+        let mut output = Vec::new();
+
+        encode_all(&mut output, &images, PnmEncodeFormat::PpmBinary).unwrap();
+
+        assert_eq!(output, b"P6\n1 1\n255\n\0\0\0P6\n1 1\n255\n\xff\xff\xff");
+    }
+
+    #[test]
+    fn encode_all_rejects_ascii_multi_image_format() {
+        let data = [0, 0, 0];
+        let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
+        let mut output = Vec::new();
+        let error = encode_all(&mut output, &[image], PnmEncodeFormat::PpmAscii).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_rejects_unsupported_pixel_format_without_writing() {
+        let data = [0];
+        let image = ImageView::new(1, 1, PixelFormat::Gray8, 1, &data).unwrap();
+        let mut output = Vec::new();
+        let error = encode_all(&mut output, &[image], PnmEncodeFormat::PpmBinary).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::UnsupportedPixelFormat {
+                pixel_format: PixelFormat::Gray8
+            }
+        );
+        assert!(output.is_empty());
     }
 
     #[test]

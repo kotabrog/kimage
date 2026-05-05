@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, NetpbmImage, raster_slice, read_any_sample_header,
+    HeaderParser, NetpbmImage, gray_image_to_pgm_native, raster_slice, read_any_sample_header,
     read_ascii_sample_bytes_with_max_value, validate_image_view, write_packed_rows,
     write_sample_header_with_max_value,
 };
@@ -145,6 +145,16 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
     }
 
     Ok(())
+}
+
+/// Encodes image views as a binary PGM P5 multi-image stream.
+pub fn encode_all<W: Write>(writer: &mut W, images: &[ImageView<'_>]) -> Result<()> {
+    let images = images
+        .iter()
+        .map(|image| gray_image_to_pgm_native(*image))
+        .collect::<Result<Vec<_>>>()?;
+
+    encode_all_native(writer, &images)
 }
 
 /// Encodes native PGM images as a binary PGM P5 multi-image stream.
@@ -625,6 +635,63 @@ mod tests {
 
         encode_all_native(&mut output, &[]).unwrap();
 
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_writes_empty_stream_for_empty_slice() {
+        let mut output = Vec::new();
+
+        encode_all(&mut output, &[]).unwrap();
+
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_writes_pgm_p5_multi_image_stream() {
+        let first_data = [0, 255];
+        let second_data = [0x34, 0x12, 0xff, 0xff];
+        let images = [
+            ImageView::new(2, 1, PixelFormat::Gray8, 2, &first_data).unwrap(),
+            ImageView::new(2, 1, PixelFormat::Gray16, 4, &second_data).unwrap(),
+        ];
+        let expected = [
+            NetpbmImage::Pgm {
+                width: 2,
+                height: 1,
+                maxval: 255,
+                data: vec![0, 255],
+            },
+            NetpbmImage::Pgm {
+                width: 2,
+                height: 1,
+                maxval: 65535,
+                data: vec![0x34, 0x12, 0xff, 0xff],
+            },
+        ];
+        let mut output = Vec::new();
+
+        encode_all(&mut output, &images).unwrap();
+
+        assert_eq!(
+            decode_all_native(&mut Cursor::new(output)).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn encode_all_rejects_unsupported_pixel_format_without_writing() {
+        let data = [0, 0, 0];
+        let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
+        let mut output = Vec::new();
+        let error = encode_all(&mut output, &[image]).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::UnsupportedPixelFormat {
+                pixel_format: PixelFormat::Rgb8
+            }
+        );
         assert!(output.is_empty());
     }
 
