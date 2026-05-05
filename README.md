@@ -125,6 +125,16 @@ cargo run --example ppm_multi_image_roundtrip
 
 The example writes `target/examples/ppm_multi_image_roundtrip.ppm`.
 
+### PNM
+
+Run the PNM roundtrip example to write and read back a small RGB gradient image using PPM P6 output:
+
+```sh
+cargo run --example pnm_roundtrip
+```
+
+The example writes `target/examples/pnm_roundtrip.ppm`.
+
 ### BMP
 
 Run the BMP roundtrip example to write and read back a small RGB gradient image:
