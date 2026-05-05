@@ -231,7 +231,50 @@ PGM / PPM の 16-bit sample を扱えるようにする。
 - 1枚だけの入力
 - P1 / P2 / P3 の複数画像風入力をエラーにすること
 
-## 7. feat/pnm-api
+## 7. feat/netpbm-image-conversion
+
+`NetpbmImage` と汎用 `Image` の変換 API を公開する。
+
+方針:
+
+- 既存の private helper を整理し、`NetpbmImage -> Image` の公開 API を追加する
+- `NetpbmImage -> Image` は既存 `decode` / `decode_ascii` と同じ正規化規則を使う
+- PBM は `0 = white`, `1 = black` を `Gray8` の `255 = white`, `0 = black` に変換する
+- PGM / PPM の `maxval < 256` は `Gray8` / `Rgb8` に正規化する
+- PGM / PPM の `maxval >= 256` は `Gray16` / `Rgb16` に正規化する
+- 変換時の丸めは既存通り `(sample * target_max + maxval / 2) / maxval` を使う
+- `Image` または `ImageView` から `NetpbmImage` への変換も追加する
+- `Gray8` / `Rgb8` からは `maxval = 255` の PGM / PPM に変換する
+- `Gray16` / `Rgb16` からは `maxval = 65535` の PGM / PPM に変換する
+- PBM への変換は threshold 方針が絡むため、必要性が明確なら専用関数として追加する
+
+API候補:
+
+```rust
+impl TryFrom<NetpbmImage> for Image
+```
+
+```rust
+impl NetpbmImage {
+    pub fn to_image(&self) -> Result<Image>;
+}
+```
+
+```rust
+pub fn gray_image_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+pub fn rgb_image_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+```
+
+想定するテスト:
+
+- PBM native を `Gray8` に変換すること
+- PGM / PPM native `maxval < 256` を `Gray8` / `Rgb8` に正規化すること
+- PGM / PPM native `maxval >= 256` を `Gray16` / `Rgb16` に正規化すること
+- `Gray8` / `Rgb8` を `maxval = 255` の native image に変換すること
+- `Gray16` / `Rgb16` を `maxval = 65535` の native image に変換すること
+- unsupported pixel format をエラーにすること
+
+## 8. feat/pnm-api
 
 P1..P6 を magic number で自動判別する上位APIを追加する。
 
@@ -255,7 +298,7 @@ P1..P6 を magic number で自動判別する上位APIを追加する。
 - `pnm::decode_all_native` が異なるsubformatの混在streamをエラーにすること
 - unsupported magic number をエラーにすること
 
-## 8. docs/pam-support-plan
+## 9. docs/pam-support-plan
 
 PAM P7 の詳細計画を別途整理する。
 

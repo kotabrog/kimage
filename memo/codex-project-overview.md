@@ -149,6 +149,8 @@ src/
 
 `pam.rs` には PAM P7 の個別実装を置く。
 
+`netpbm.rs` には、`NetpbmImage` と汎用 `Image` の変換 API も集約する。`pnm.rs` を追加する前に、形式別 codec 内の private 変換 helper を公開 API として整理する。
+
 `pnm.rs` は、P1..P6 を magic number で自動判別する上位APIとして追加を検討する。形式別APIは `pbm.rs` / `pgm.rs` / `ppm.rs` に残し、`pnm.rs` は事前にsubformatを判定したくない利用者向けの入口にする。native API と正規化済み API の両方を用意する。
 
 ## Netpbm 仕様メモ

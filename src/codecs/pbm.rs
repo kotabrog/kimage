@@ -228,6 +228,15 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
     Ok(())
 }
 
+/// Encodes native PBM images as a binary PBM P4 multi-image stream.
+pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NetpbmImage]) -> Result<()> {
+    for image in images {
+        encode_native(writer, image)?;
+    }
+
+    Ok(())
+}
+
 fn pbm_row_bytes(dimensions: Dimensions) -> Result<usize> {
     (dimensions.width as usize)
         .checked_add(7)
@@ -638,6 +647,56 @@ mod tests {
         encode_native(&mut output, &image).unwrap();
 
         assert_eq!(output, b"P4\n3 2\n\x40\xa0");
+    }
+
+    #[test]
+    fn encode_all_native_writes_empty_stream_for_empty_slice() {
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &[]).unwrap();
+
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_native_writes_pbm_p4_multi_image_stream() {
+        let images = [
+            NetpbmImage::Pbm {
+                width: 3,
+                height: 1,
+                data: vec![0, 1, 0],
+            },
+            NetpbmImage::Pbm {
+                width: 2,
+                height: 1,
+                data: vec![1, 1],
+            },
+        ];
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &images).unwrap();
+
+        assert_eq!(decode_all_native(&mut Cursor::new(output)).unwrap(), images);
+    }
+
+    #[test]
+    fn encode_all_native_rejects_mixed_format() {
+        let images = [
+            NetpbmImage::Pbm {
+                width: 1,
+                height: 1,
+                data: vec![0],
+            },
+            NetpbmImage::Pgm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![0],
+            },
+        ];
+        let error = encode_all_native(&mut Vec::new(), &images).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
     }
 
     #[test]

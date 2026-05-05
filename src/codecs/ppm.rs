@@ -151,6 +151,15 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
     Ok(())
 }
 
+/// Encodes native PPM images as a binary PPM P6 multi-image stream.
+pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NetpbmImage]) -> Result<()> {
+    for image in images {
+        encode_native(writer, image)?;
+    }
+
+    Ok(())
+}
+
 /// Encodes a native PPM image as ASCII PPM P3.
 pub fn encode_ascii_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()> {
     let (width, height, maxval, data) = validate_native_ppm_image(image)?;
@@ -642,6 +651,59 @@ mod tests {
         encode_native(&mut output, &image).unwrap();
 
         assert_eq!(output, b"P6\n1 1\n65535\n\x12\x34\x56\x78\xff\xff");
+    }
+
+    #[test]
+    fn encode_all_native_writes_empty_stream_for_empty_slice() {
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &[]).unwrap();
+
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_native_writes_ppm_p6_multi_image_stream() {
+        let images = [
+            NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 15,
+                data: vec![15, 0, 5],
+            },
+            NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 65535,
+                data: vec![0x34, 0x12, 0x78, 0x56, 0xff, 0xff],
+            },
+        ];
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &images).unwrap();
+
+        assert_eq!(decode_all_native(&mut Cursor::new(output)).unwrap(), images);
+    }
+
+    #[test]
+    fn encode_all_native_rejects_mixed_format() {
+        let images = [
+            NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![0, 0, 0],
+            },
+            NetpbmImage::Pgm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![0],
+            },
+        ];
+        let error = encode_all_native(&mut Vec::new(), &images).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
     }
 
     #[test]
