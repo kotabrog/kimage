@@ -44,6 +44,13 @@ pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
     Image::try_from(decode_native(reader)?)
 }
 
+pub fn decode_all<R: Read>(reader: &mut R) -> Result<Vec<Image>> {
+    decode_all_native(reader)?
+        .into_iter()
+        .map(Image::try_from)
+        .collect()
+}
+
 pub fn decode_native<R: Read>(reader: &mut R) -> Result<PamImage> {
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
@@ -76,6 +83,15 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<PamImage>> {
 pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>) -> Result<()> {
     let image = image_view_to_pam_native(image)?;
     encode_native(writer, &image)
+}
+
+pub fn encode_all<W: Write>(writer: &mut W, images: &[ImageView<'_>]) -> Result<()> {
+    let images = images
+        .iter()
+        .map(|image| image_view_to_pam_native(*image))
+        .collect::<Result<Vec<_>>>()?;
+
+    encode_all_native(writer, &images)
 }
 
 pub fn encode_native<W: Write>(writer: &mut W, image: &PamImage) -> Result<()> {
@@ -768,6 +784,27 @@ mod tests {
     }
 
     #[test]
+    fn decode_all_reads_multi_image_stream_as_images() {
+        let input = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n\0\0\0P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n\xff\xff\xff";
+        let images = decode_all(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].pixel_format, PixelFormat::Rgb8);
+        assert_eq!(images[0].data, [0, 0, 0]);
+        assert_eq!(images[1].pixel_format, PixelFormat::Rgb8);
+        assert_eq!(images[1].data, [255, 255, 255]);
+    }
+
+    #[test]
+    fn decode_all_rejects_unsupported_image_conversion() {
+        let input =
+            b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 2\nMAXVAL 255\nTUPLTYPE GRAYSCALE_ALPHA\nENDHDR\n\x80\xff";
+        let error = decode_all(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
     fn decode_converts_black_and_white_to_gray8() {
         let input =
             b"P7\nWIDTH 2\nHEIGHT 1\nDEPTH 1\nMAXVAL 1\nTUPLTYPE BLACKANDWHITE\nENDHDR\n\0\x01";
@@ -850,6 +887,48 @@ mod tests {
             output,
             b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n\xff\0\x80\x40"
         );
+    }
+
+    #[test]
+    fn encode_all_writes_multi_image_stream() {
+        let first_data = [0, 0, 0];
+        let second_data = [255, 255, 255];
+        let images = [
+            ImageView::new(1, 1, PixelFormat::Rgb8, 3, &first_data).unwrap(),
+            ImageView::new(1, 1, PixelFormat::Rgb8, 3, &second_data).unwrap(),
+        ];
+        let mut output = Vec::new();
+
+        encode_all(&mut output, &images).unwrap();
+
+        assert_eq!(
+            decode_all(&mut Cursor::new(output)).unwrap(),
+            [
+                Image::new(1, 1, PixelFormat::Rgb8, vec![0, 0, 0]).unwrap(),
+                Image::new(1, 1, PixelFormat::Rgb8, vec![255, 255, 255]).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn encode_all_rejects_invalid_image_without_writing() {
+        let image = ImageView {
+            width: 0,
+            height: 1,
+            pixel_format: PixelFormat::Rgb8,
+            stride: 0,
+            data: &[],
+        };
+        let mut output = Vec::new();
+        let error = encode_all(&mut output, &[image]).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "width and height must be greater than zero"
+            }
+        );
+        assert!(output.is_empty());
     }
 
     #[test]
