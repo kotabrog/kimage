@@ -45,6 +45,10 @@ impl<'a> HeaderParser<'a> {
         self.position
     }
 
+    pub(crate) fn set_position(&mut self, position: usize) {
+        self.position = position;
+    }
+
     pub(crate) fn next_token(&mut self) -> Result<&'a [u8]> {
         self.skip_whitespace_and_comments();
 

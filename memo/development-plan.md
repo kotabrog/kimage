@@ -43,7 +43,7 @@ chore/prepare-initial-release
 - PBM P1 / P4
 - PGM P2 / P5
 - PPM P3 / P6
-- PGM / PPM の `maxval` 1..65535
+- PGM / PPM の `maxval` 1..=65535
 - 8-bit と 16-bit の sample
 - Netpbm の `maxval` を保持する native image 型
 - native image から汎用 `Image` への正規化変換
@@ -87,7 +87,7 @@ Netpbm parser を仕様に寄せる。
 
 - whitespace として space, TAB, CR, LF, VT, FF を扱う
 - コメントを `#` から次の CR または LF の直前までとして扱う
-- `maxval` を `1..65535` として読み、0 と 65536 以上をエラーにする
+- `maxval` を `1..=65535` として読み、0 と 65536 以上をエラーにする
 - raster 長計算を overflow しない共通 helper に寄せる
 - binary PGM / PPM / PBM で必要なraster長を正確に消費する
 - trailing data を「次画像の可能性があるデータ」として扱えるよう、parser位置を正確に管理する
@@ -217,11 +217,7 @@ PGM / PPM の 16-bit sample を扱えるようにする。
 - `pbm::decode_all_native`, `pgm::decode_all_native`, `ppm::decode_all_native` を追加する
 - 必要に応じて、正規化済み `Image` を返す `decode_all` も追加する
 - 形式別の `decode_all` は仕様に沿って同一subformatのstreamだけを扱う
-- 上位APIとして `pnm::decode_native` / `pnm::decode_all_native` も追加する
-- `pnm::decode_native` は P1..P6 を magic number で自動判別して1枚読む
-- `pnm::decode_all_native` は最初のmagic numberでsubformatを決め、そのsubformatのstreamとして読む
-- `pnm::decode_all_native` は異なるsubformatの混在streamを標準対応しない
-- 必要なら `pbm::Decoder`, `pgm::Decoder`, `ppm::Decoder`, `pnm::Decoder` 型を追加し、1枚ずつ読み進められるようにする
+- 必要なら `pbm::Decoder`, `pgm::Decoder`, `ppm::Decoder` 型を追加し、1枚ずつ読み進められるようにする
 - raw形式ではraster直後に次画像が続くため、余分なデータを単純なエラーにしない
 - plain形式 P1 / P2 / P3 は仕様上1ファイル1画像として扱い、multi-image APIでは複数画像streamの対象にしない
 - plain形式で複数画像のような入力が来た場合は、仕様重視でエラーにする
@@ -230,14 +226,79 @@ PGM / PPM の 16-bit sample を扱えるようにする。
 
 - P4 / P5 / P6 の2画像連結
 - native image の `maxval` が画像ごとに保持されること
-- `pnm::decode_all_native` が最初のmagic numberでsubformatを決めること
-- `pnm::decode_all_native` が異なるsubformatの混在streamをエラーにすること
 - 途中で壊れた2枚目のエラー
 - 空入力
 - 1枚だけの入力
 - P1 / P2 / P3 の複数画像風入力をエラーにすること
 
-## 7. docs/pam-support-plan
+## 7. feat/netpbm-image-conversion
+
+`NetpbmImage` と汎用 `Image` の変換 API を公開する。
+
+方針:
+
+- 既存の private helper を整理し、`NetpbmImage -> Image` の公開 API を追加する
+- `NetpbmImage -> Image` は既存 `decode` / `decode_ascii` と同じ正規化規則を使う
+- PBM は `0 = white`, `1 = black` を `Gray8` の `255 = white`, `0 = black` に変換する
+- PGM / PPM の `maxval < 256` は `Gray8` / `Rgb8` に正規化する
+- PGM / PPM の `maxval >= 256` は `Gray16` / `Rgb16` に正規化する
+- 変換時の丸めは既存通り `(sample * target_max + maxval / 2) / maxval` を使う
+- `Image` または `ImageView` から `NetpbmImage` への変換も追加する
+- `Gray8` / `Rgb8` からは `maxval = 255` の PGM / PPM に変換する
+- `Gray16` / `Rgb16` からは `maxval = 65535` の PGM / PPM に変換する
+- PBM への変換は threshold 方針が絡むため、必要性が明確なら専用関数として追加する
+
+API候補:
+
+```rust
+impl TryFrom<NetpbmImage> for Image
+```
+
+```rust
+impl NetpbmImage {
+    pub fn to_image(&self) -> Result<Image>;
+}
+```
+
+```rust
+pub fn gray_image_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+pub fn rgb_image_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+```
+
+想定するテスト:
+
+- PBM native を `Gray8` に変換すること
+- PGM / PPM native `maxval < 256` を `Gray8` / `Rgb8` に正規化すること
+- PGM / PPM native `maxval >= 256` を `Gray16` / `Rgb16` に正規化すること
+- `Gray8` / `Rgb8` を `maxval = 255` の native image に変換すること
+- `Gray16` / `Rgb16` を `maxval = 65535` の native image に変換すること
+- unsupported pixel format をエラーにすること
+
+## 8. feat/pnm-api
+
+P1..P6 を magic number で自動判別する上位APIを追加する。
+
+方針:
+
+- 形式別APIは `pbm.rs` / `pgm.rs` / `ppm.rs` に残す
+- `pnm.rs` は、呼び出し側が事前にsubformatを判定したくない場合の入口にする
+- `pnm::decode_native` は P1..P6 を magic number で自動判別して1枚読む
+- `pnm::decode` は `pnm::decode_native` の結果を正規化済み `Image` に変換する
+- `pnm::decode_all_native` は最初のmagic numberでsubformatを決め、そのsubformatのstreamとして読む
+- `pnm::decode_all_native` は異なるsubformatの混在streamを標準対応しない
+- 必要なら `pnm::Decoder` 型を追加し、1枚ずつ読み進められるようにする
+- encode側は、必要性が明確になるまで形式別APIを優先し、pnm上位APIではdecodeを先に固める
+
+想定するテスト:
+
+- P1..P6 を magic number で自動判別して読めること
+- `pnm::decode` が正規化済み `Image` を返すこと
+- `pnm::decode_native` が `NetpbmImage` の適切な variant を返すこと
+- `pnm::decode_all_native` が最初のmagic numberでsubformatを決めること
+- `pnm::decode_all_native` が異なるsubformatの混在streamをエラーにすること
+- unsupported magic number をエラーにすること
+
+## 9. docs/pam-support-plan
 
 PAM P7 の詳細計画を別途整理する。
 
@@ -273,7 +334,7 @@ PAM P7 を追加する。
 
 - `WIDTH`, `HEIGHT`, `DEPTH`, `MAXVAL`, `ENDHDR` を必須として扱う
 - `TUPLTYPE` は任意だが、対応 tuple type の判定に使う
-- `MAXVAL` は `1..65535`
+- `MAXVAL` は `1..=65535`
 - raster sample は maxval に応じた最小byte数で、big-endianとして読む
 - PBM相当の `BLACKANDWHITE` は PAM では `0 = black`, `1 = white` であり、PBM の `0 = white`, `1 = black` と逆である点に注意する
 

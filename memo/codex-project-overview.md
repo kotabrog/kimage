@@ -41,7 +41,7 @@
 対象:
 
 - parser の仕様追従
-- PGM / PPM の `maxval` 1..65535
+- PGM / PPM の `maxval` 1..=65535
 - PGM / PPM の 16-bit sample
 - Netpbm の `maxval` を保持する native image 型
 - native image から汎用 `Image` への正規化変換
@@ -149,6 +149,8 @@ src/
 
 `pam.rs` には PAM P7 の個別実装を置く。
 
+`netpbm.rs` には、`NetpbmImage` と汎用 `Image` の変換 API も集約する。`pnm.rs` を追加する前に、形式別 codec 内の private 変換 helper を公開 API として整理する。
+
 `pnm.rs` は、P1..P6 を magic number で自動判別する上位APIとして追加を検討する。形式別APIは `pbm.rs` / `pgm.rs` / `ppm.rs` に残し、`pnm.rs` は事前にsubformatを判定したくない利用者向けの入口にする。native API と正規化済み API の両方を用意する。
 
 ## Netpbm 仕様メモ
@@ -162,7 +164,7 @@ src/
 - コメントは `#` から次の CR または LF の直前まで。
 - PBM P4 は1bit/pixelで、各行は8bit単位に詰める。余ったbitは don't care。
 - PBM は `0 = white`, `1 = black`。
-- PGM / PPM の `maxval` は 1..65535。
+- PGM / PPM の `maxval` は 1..=65535。
 - PGM / PPM の binary sample は、`maxval < 256` なら1 byte、`maxval >= 256` なら2 bytes big-endian。
 - `NetpbmImage` では PGM / PPM sample値を正規化せず保持する。`maxval >= 256` のsampleは内部 little-endian の `u16` として持つ。
 - 汎用 `Image` へ変換する場合のみ、target bit depth のfull rangeへ正規化する。

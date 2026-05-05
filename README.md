@@ -21,10 +21,10 @@ Supported:
 - PGM/PPM samples normalized to `Gray8` / `Rgb8` for `maxval < 256`
 - PGM/PPM samples normalized to `Gray16` / `Rgb16` for `maxval >= 256`
 - native PGM/PPM APIs that preserve `maxval` and sample values
+- native multi-image streams for binary PBM P4, PGM P5, and PPM P6
 
 Unsupported:
 
-- multi-image Netpbm streams
 - PAM P7
 
 ### BMP
@@ -114,6 +114,14 @@ cargo run --example ppm16_roundtrip
 ```
 
 The example writes `target/examples/ppm16_roundtrip.ppm`.
+
+Run the binary PPM P6 multi-image roundtrip example:
+
+```sh
+cargo run --example ppm_multi_image_roundtrip
+```
+
+The example writes `target/examples/ppm_multi_image_roundtrip.ppm`.
 
 ### BMP
 
