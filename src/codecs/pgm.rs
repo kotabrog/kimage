@@ -23,15 +23,36 @@ pub fn decode_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
     reader.read_to_end(&mut data)?;
 
     let mut parser = HeaderParser::new(&data);
-    let (dimensions, maxval) = read_any_sample_header(&mut parser, MAGIC)?;
+    decode_one_native(&data, &mut parser)
+}
+
+/// Decodes all binary PGM P5 images from a multi-image stream.
+pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NetpbmImage>> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+
+    let mut parser = HeaderParser::new(&data);
+    let mut images = Vec::new();
+
+    while parser.has_more_tokens() {
+        images.push(decode_one_native(&data, &mut parser)?);
+    }
+
+    Ok(images)
+}
+
+fn decode_one_native(data: &[u8], parser: &mut HeaderParser<'_>) -> Result<NetpbmImage> {
+    let (dimensions, maxval) = read_any_sample_header(parser, MAGIC)?;
     parser.consume_raster_separator()?;
     let pixel_format = pgm_pixel_format_for_maxval(maxval);
-    let raster = raster_slice(&data, &parser, dimensions, pixel_format)?;
+    let raster = raster_slice(data, parser, dimensions, pixel_format)?;
+    let next_position = parser.position() + raster.len();
     let data = if maxval < 256 {
         raster.to_vec()
     } else {
         be_samples_to_le_bytes(raster)
     };
+    parser.set_position(next_position);
 
     Ok(NetpbmImage::Pgm {
         width: dimensions.width,
@@ -345,6 +366,123 @@ mod tests {
                 height: 1,
                 maxval: 15,
                 data: vec![0, 15]
+            }
+        );
+    }
+
+    #[test]
+    fn decode_all_native_returns_empty_vec_for_empty_input() {
+        let images = decode_all_native(&mut Cursor::new([])).unwrap();
+
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn decode_all_native_reads_single_pgm_p5_image() {
+        let input = b"P5\n2 1\n15\n\x00\x0f";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [NetpbmImage::Pgm {
+                width: 2,
+                height: 1,
+                maxval: 15,
+                data: vec![0, 15]
+            }]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_reads_concatenated_pgm_p5_images() {
+        let input = b"P5\n2 1\n15\n\x00\x0fP5\n1 1\n255\n\x80";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NetpbmImage::Pgm {
+                    width: 2,
+                    height: 1,
+                    maxval: 15,
+                    data: vec![0, 15]
+                },
+                NetpbmImage::Pgm {
+                    width: 1,
+                    height: 1,
+                    maxval: 255,
+                    data: vec![128]
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_preserves_16_bit_samples() {
+        let input = b"P5\n1 1\n65535\n\x12\x34P5\n1 1\n256\n\x01\0";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NetpbmImage::Pgm {
+                    width: 1,
+                    height: 1,
+                    maxval: 65535,
+                    data: vec![0x34, 0x12]
+                },
+                NetpbmImage::Pgm {
+                    width: 1,
+                    height: 1,
+                    maxval: 256,
+                    data: vec![0x00, 0x01]
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_accepts_whitespace_and_comments_between_images() {
+        let input = b"P5\n1 1\n255\n\x00\n# next image\nP5\n1 1\n255\n\xff";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NetpbmImage::Pgm {
+                    width: 1,
+                    height: 1,
+                    maxval: 255,
+                    data: vec![0]
+                },
+                NetpbmImage::Pgm {
+                    width: 1,
+                    height: 1,
+                    maxval: 255,
+                    data: vec![255]
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_rejects_mixed_magic() {
+        let input = b"P5\n1 1\n255\n\0P6\n1 1\n255\n\0\0\0";
+        let error = decode_all_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_all_native_rejects_broken_second_image() {
+        let input = b"P5\n1 1\n255\n\0P5\n2 1\n255\n\x80";
+        let error = decode_all_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidBufferLength {
+                expected: 2,
+                actual: 1
             }
         );
     }

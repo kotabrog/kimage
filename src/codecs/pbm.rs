@@ -58,11 +58,31 @@ pub fn decode_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
     reader.read_to_end(&mut data)?;
 
     let mut parser = HeaderParser::new(&data);
-    let dimensions = read_bitmap_header(&mut parser, BINARY_MAGIC)?;
+    decode_one_native(&data, &mut parser)
+}
+
+/// Decodes all binary PBM P4 images from a multi-image stream.
+pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NetpbmImage>> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+
+    let mut parser = HeaderParser::new(&data);
+    let mut images = Vec::new();
+
+    while parser.has_more_tokens() {
+        images.push(decode_one_native(&data, &mut parser)?);
+    }
+
+    Ok(images)
+}
+
+fn decode_one_native(data: &[u8], parser: &mut HeaderParser<'_>) -> Result<NetpbmImage> {
+    let dimensions = read_bitmap_header(parser, BINARY_MAGIC)?;
     parser.consume_raster_separator()?;
 
     let row_bytes = pbm_row_bytes(dimensions)?;
-    let raster = pbm_raster_slice(&data, &parser, dimensions, row_bytes)?;
+    let raster = pbm_raster_slice(data, parser, dimensions, row_bytes)?;
+    let next_position = parser.position() + raster.len();
     let mut pixels = Vec::with_capacity(dimensions.width as usize * dimensions.height as usize);
 
     for row in 0..dimensions.height as usize {
@@ -75,6 +95,8 @@ pub fn decode_native<R: Read>(reader: &mut R) -> Result<NetpbmImage> {
             pixels.push(bit);
         }
     }
+
+    parser.set_position(next_position);
 
     Ok(NetpbmImage::Pbm {
         width: dimensions.width,
@@ -433,6 +455,94 @@ mod tests {
                 width: 3,
                 height: 2,
                 data: vec![0, 1, 0, 1, 0, 1]
+            }
+        );
+    }
+
+    #[test]
+    fn decode_all_native_returns_empty_vec_for_empty_input() {
+        let images = decode_all_native(&mut Cursor::new([])).unwrap();
+
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn decode_all_native_reads_single_pbm_p4_image() {
+        let input = b"P4\n3 1\n\x40";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [NetpbmImage::Pbm {
+                width: 3,
+                height: 1,
+                data: vec![0, 1, 0]
+            }]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_reads_concatenated_pbm_p4_images() {
+        let input = b"P4\n3 1\n\x40P4\n2 1\n\xc0";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NetpbmImage::Pbm {
+                    width: 3,
+                    height: 1,
+                    data: vec![0, 1, 0]
+                },
+                NetpbmImage::Pbm {
+                    width: 2,
+                    height: 1,
+                    data: vec![1, 1]
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_accepts_whitespace_and_comments_between_images() {
+        let input = b"P4\n1 1\n\0\n# next image\nP4\n1 1\n\x80";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NetpbmImage::Pbm {
+                    width: 1,
+                    height: 1,
+                    data: vec![0]
+                },
+                NetpbmImage::Pbm {
+                    width: 1,
+                    height: 1,
+                    data: vec![1]
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_rejects_mixed_magic() {
+        let input = b"P4\n1 1\n\0P5\n1 1\n255\n\0";
+        let error = decode_all_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_all_native_rejects_broken_second_image() {
+        let input = b"P4\n1 1\n\0P4\n9 1\n\x80";
+        let error = decode_all_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidBufferLength {
+                expected: 2,
+                actual: 1
             }
         );
     }
