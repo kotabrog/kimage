@@ -1,12 +1,14 @@
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::Path;
+use std::process::Command;
 
 use kimage::{ImageView, PixelFormat, codecs::pam};
 
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 64;
 const OUTPUT_PATH: &str = "target/examples/pam_roundtrip.pam";
+const PNG_OUTPUT_PATH: &str = "target/examples/pam_roundtrip.png";
 
 fn main() -> kimage::Result<()> {
     let pixels = gradient_rgb8(WIDTH, HEIGHT);
@@ -31,8 +33,34 @@ fn main() -> kimage::Result<()> {
     assert_eq!(decoded.data, pixels);
 
     println!("PAM roundtrip succeeded: {}", path.display());
+    try_convert_to_png(path, Path::new(PNG_OUTPUT_PATH));
 
     Ok(())
+}
+
+fn try_convert_to_png(input: &Path, output: &Path) {
+    let result = Command::new("pamtopng").arg(input).output();
+
+    match result {
+        Ok(result) if result.status.success() => {
+            if let Err(error) = fs::write(output, result.stdout) {
+                eprintln!("pamtopng succeeded but PNG write failed: {error}");
+                return;
+            }
+
+            println!("PAM converted to PNG: {}", output.display());
+        }
+        Ok(result) => {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            eprintln!("pamtopng failed; PNG was not written: {}", stderr.trim());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            println!("pamtopng not found; PNG conversion skipped");
+        }
+        Err(error) => {
+            eprintln!("pamtopng could not run; PNG conversion skipped: {error}");
+        }
+    }
 }
 
 fn gradient_rgb8(width: u32, height: u32) -> Vec<u8> {
