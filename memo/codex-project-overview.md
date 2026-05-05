@@ -23,11 +23,15 @@
   - 内部では `Gray8` に展開
   - PBM の `0 = white`, `1 = black` を `Gray8` の `255 = white`, `0 = black` に変換
 - PGM P2 / P5
-  - `Gray8`
-  - `maxval = 255`
+  - `Gray8` / `Gray16`
+  - `maxval = 1..=65535`
 - PPM P3 / P6
-  - `Rgb8`
-  - `maxval = 255`
+  - `Rgb8` / `Rgb16`
+  - `maxval = 1..=65535`
+- PNM
+  - P1..P6 の自動判別 decode
+  - P1..P6 の明示指定 encode
+  - P4 / P5 / P6 の multi-image stream
 - BMP
   - 24-bit uncompressed bottom-up
   - `BITMAPINFOHEADER`
@@ -74,7 +78,9 @@ pub struct ImageView<'a> {
 
 pub enum PixelFormat {
     Gray8,
+    Gray16,
     Rgb8,
+    Rgb16,
     Rgba8,
 }
 ```
@@ -115,7 +121,13 @@ PGM / PPM の 16-bit sample 対応では、正規化済み `Image` 用に `Pixel
 
 正規化では、PGM / PPM の `0..maxval` を `0..255` または `0..65535` にスケーリングする。色空間変換や gamma 補正は行わない。
 
-PAM P7 は、PGM / PPM の 16-bit 対応と multi-image API が固まった後に、改めて詳細計画を立てる。可能であれば広く対応したいが、alpha 付き tuple type を扱う場合は `GrayAlpha8` / `GrayAlpha16` / `Rgba16` などの追加が必要になる可能性がある。
+PAM P7 は、PBM / PGM / PPM とは別の P7 形式として扱う。PAM は任意の `DEPTH` と `TUPLTYPE` を持てるため、PBM / PGM / PPM 用の `NetpbmImage` には混ぜず、別途 `PamImage` を追加する方針にする。
+
+`PamImage` は native 保持型として広めに対応する。`TUPLTYPE` が未知または未指定でも、PAM raster として妥当であれば `decode_native` では保持できるようにする。一方で、汎用 `Image` への変換は意味が明確な visual tuple type のみ対応する。
+
+PAM の 16-bit sample は PGM / PPM と同様に、ファイル上は big-endian、内部 `data` は little-endian に統一する。
+
+alpha 付き tuple type は段階的に扱う。まず `RGB_ALPHA` + `maxval < 256` は既存の `Rgba8` へ変換可能とする。`GRAYSCALE_ALPHA`, `BLACKANDWHITE_ALPHA`, `RGB_ALPHA` + `maxval >= 256` は、`GrayAlpha8` / `GrayAlpha16` / `Rgba16` などの `PixelFormat` 追加が必要になるため、native 対応を先に行い、汎用 `Image` 変換は別タスクで検討する。
 
 ## モジュール構成
 
@@ -142,16 +154,15 @@ src/
 src/
     codecs/
         pam.rs
-        pnm.rs
 ```
 
 `netpbm.rs` には、PBM / PGM / PPM / PAM で共通する token parser、header helper、raster length helper を置く。
 
 `pam.rs` には PAM P7 の個別実装を置く。
 
-`netpbm.rs` には、`NetpbmImage` と汎用 `Image` の変換 API も集約する。`pnm.rs` を追加する前に、形式別 codec 内の private 変換 helper を公開 API として整理する。
+`netpbm.rs` には、`NetpbmImage` と汎用 `Image` の変換 API も集約する。
 
-`pnm.rs` は、P1..P6 を magic number で自動判別する上位APIとして追加を検討する。形式別APIは `pbm.rs` / `pgm.rs` / `ppm.rs` に残し、`pnm.rs` は事前にsubformatを判定したくない利用者向けの入口にする。native API と正規化済み API の両方を用意する。
+`pnm.rs` は、P1..P6 を magic number で自動判別する上位APIとして追加済み。形式別APIは `pbm.rs` / `pgm.rs` / `ppm.rs` に残し、`pnm.rs` は事前にsubformatを判定したくない利用者向けの入口にする。decode / encode / multi-image の上位APIを持つ。
 
 ## Netpbm 仕様メモ
 
@@ -171,6 +182,13 @@ src/
 - PGM / PPM の sample 値は仕様上 BT.709 gamma transfer function に基づくが、このクレートでは色空間変換や gamma 補正は行わない。
 - PAM P7 は `WIDTH`, `HEIGHT`, `DEPTH`, `MAXVAL`, `ENDHDR` を持つ別形式。`TUPLTYPE` は任意だが、画像として扱うには重要。
 - PAM の `BLACKANDWHITE` は `0 = black`, `1 = white` で、PBMとは値の意味が逆。
+- PAM header は行単位で、`ENDHDR` の直後から raster が始まる。
+- PAM は常に binary で、plain / ASCII 形式はない。
+- PAM sample は `maxval < 256` なら1 byte、`maxval >= 256` なら2 bytes big-endian。
+- PAM の `TUPLTYPE` は複数行を連結でき、未指定の場合は空文字列として扱う。
+- `decode_native` / `encode_native` では unknown `TUPLTYPE` も保持可能にする。
+- `decode` / `encode` は `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `RGB_ALPHA` のうち既存 `PixelFormat` に変換できる範囲から対応する。
+- PAM の `DEPTH` は仕様上 tuple type と独立だが、このクレートの初期実装では対応 tuple type の期待 depth と一致必須にする。
 
 ## 後回しにするもの
 
