@@ -472,9 +472,9 @@ public API の個別対応候補:
 - `decode_all` の有無を形式間で揃える
   - `pam` は `decode_all` / `decode_all_native` を持つ
   - `pbm` / `pgm` / `ppm` / `pnm` にも正規化済み `decode_all` を追加し、形式間で揃える
-- `ImageError::Io` が `std::io::ErrorKind` だけを保持している点を見直す
-  - 現状は `Clone` / `Eq` しやすい
-  - 元の IO error message は失われるため、利用者向けには `std::io::Error` を保持する設計も候補にする
+- `ImageError::Io` は `std::io::Error` を保持し、`Error::source()` から元の IO error を参照できる形にする
+  - `Clone` / `Eq` は実装しない
+  - 非IOエラーのテストや比較用途のため、`PartialEq` は手書きで維持する
 - `gray_image_to_pbm_native`, `gray_image_to_pgm_native`, `rgb_image_to_ppm_native` の命名を見直す
   - 現状は意味が明確だが、やや実装寄り
   - 初回リリースでは維持し、将来的に `TryFrom` などの変換APIを追加する余地を残す
