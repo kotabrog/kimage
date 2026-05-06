@@ -1,6 +1,6 @@
 use std::io::{Cursor, Read};
 
-use crate::codecs::{NetpbmImage, PamImage, bmp, pam, pbm, pgm, ppm};
+use crate::codecs::{NetpbmImage, PamImage, bmp, pam, pbm, pgm, pnm, ppm};
 use crate::{Image, ImageError, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +49,17 @@ pub fn decode_native<R: Read>(reader: &mut R) -> Result<NativeImage> {
     decode_native_from_slice(&data)
 }
 
+/// Decodes all native images by detecting the stream format from the input bytes.
+///
+/// This supports multi-image PNM binary streams (P4, P5, P6) and PAM (P7).
+/// Empty input returns an empty vector. Plain PNM formats (P1, P2, P3) and BMP
+/// return `ImageError::UnsupportedFormat`.
+pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NativeImage>> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+    decode_all_native_from_slice(&data)
+}
+
 fn decode_from_slice(data: &[u8]) -> Result<Image> {
     match detect_format(data)? {
         ImageFormat::PbmAscii => pbm::decode_ascii(&mut Cursor::new(data)),
@@ -86,6 +97,29 @@ fn decode_native_from_slice(data: &[u8]) -> Result<NativeImage> {
             data,
         ))?)),
         ImageFormat::Bmp => Err(ImageError::UnsupportedFormat),
+    }
+}
+
+fn decode_all_native_from_slice(data: &[u8]) -> Result<Vec<NativeImage>> {
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    match detect_format(data)? {
+        ImageFormat::PbmBinary | ImageFormat::PgmBinary | ImageFormat::PpmBinary => {
+            pnm::decode_all_native(&mut Cursor::new(data)).map(|images| {
+                images
+                    .into_iter()
+                    .map(NativeImage::Netpbm)
+                    .collect::<Vec<_>>()
+            })
+        }
+        ImageFormat::Pam => pam::decode_all_native(&mut Cursor::new(data))
+            .map(|images| images.into_iter().map(NativeImage::Pam).collect::<Vec<_>>()),
+        ImageFormat::PbmAscii
+        | ImageFormat::PgmAscii
+        | ImageFormat::PpmAscii
+        | ImageFormat::Bmp => Err(ImageError::UnsupportedFormat),
     }
 }
 
@@ -288,6 +322,139 @@ mod tests {
             0, 0, 0x80, 0, 0xff, 0,
         ];
         let error = decode_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_all_native_returns_empty_vec_for_empty_input() {
+        let images = decode_all_native(&mut Cursor::new([])).unwrap();
+
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn decode_all_native_detects_pbm_binary_stream() {
+        let input = b"P4\n1 1\n\x80P4\n1 1\n\0";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NativeImage::Netpbm(NetpbmImage::Pbm {
+                    width: 1,
+                    height: 1,
+                    data: vec![1],
+                }),
+                NativeImage::Netpbm(NetpbmImage::Pbm {
+                    width: 1,
+                    height: 1,
+                    data: vec![0],
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_detects_pgm_binary_stream() {
+        let input = b"P5\n1 1\n15\n\x0fP5\n1 1\n15\n\0";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NativeImage::Netpbm(NetpbmImage::Pgm {
+                    width: 1,
+                    height: 1,
+                    maxval: 15,
+                    data: vec![15],
+                }),
+                NativeImage::Netpbm(NetpbmImage::Pgm {
+                    width: 1,
+                    height: 1,
+                    maxval: 15,
+                    data: vec![0],
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_detects_ppm_binary_stream() {
+        let input = b"P6\n1 1\n255\n\xff\0\x80P6\n1 1\n255\n\0\x80\xff";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NativeImage::Netpbm(NetpbmImage::Ppm {
+                    width: 1,
+                    height: 1,
+                    maxval: 255,
+                    data: vec![255, 0, 128],
+                }),
+                NativeImage::Netpbm(NetpbmImage::Ppm {
+                    width: 1,
+                    height: 1,
+                    maxval: 255,
+                    data: vec![0, 128, 255],
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_detects_pam_stream() {
+        let image = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n\xff\0\x80";
+        let input = [image.as_slice(), image.as_slice()].concat();
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NativeImage::Pam(PamImage {
+                    width: 1,
+                    height: 1,
+                    depth: 3,
+                    maxval: 255,
+                    tuple_type: Some(PamTupleType::Rgb),
+                    data: vec![255, 0, 128],
+                }),
+                NativeImage::Pam(PamImage {
+                    width: 1,
+                    height: 1,
+                    depth: 3,
+                    maxval: 255,
+                    tuple_type: Some(PamTupleType::Rgb),
+                    data: vec![255, 0, 128],
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_rejects_plain_pnm() {
+        let error = decode_all_native(&mut Cursor::new(b"P1\n1 1\n0\n")).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_all_native_rejects_bmp() {
+        let input = [
+            0x42, 0x4d, 0x3a, 0, 0, 0, 0, 0, 0, 0, 0x36, 0, 0, 0, 0x28, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 1, 0, 0x18, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0x80, 0, 0xff, 0,
+        ];
+        let error = decode_all_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_all_native_rejects_mixed_pnm_binary_stream() {
+        let error = decode_all_native(&mut Cursor::new(b"P5\n1 1\n255\n\0P6\n1 1\n255\n\0\0\0"))
+            .unwrap_err();
 
         assert_eq!(error, ImageError::UnsupportedFormat);
     }

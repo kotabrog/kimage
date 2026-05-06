@@ -20,6 +20,12 @@ let native = kimage::decode_native(&mut reader)?;
 let image = native.to_image()?;
 ```
 
+Use `kimage::decode_all_native` to read multi-image binary PNM or PAM streams:
+
+```rust
+let images = kimage::decode_all_native(&mut reader)?;
+```
+
 For format-specific behavior, use the modules under `kimage::codecs`.
 
 ## Current Format Support
@@ -28,6 +34,7 @@ The current implementations intentionally cover only small, early subsets of eac
 
 Top-level `kimage::decode` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, PAM P7, and BMP.
 Top-level `kimage::decode_native` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, and PAM P7.
+Top-level `kimage::decode_all_native` supports multi-image PBM P4, PGM P5, PPM P6, and PAM P7 streams.
 
 ### PBM / PGM / PPM
 
