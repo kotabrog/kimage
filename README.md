@@ -12,6 +12,14 @@ Use `kimage::decode` to read a supported image by detecting its magic number:
 let image = kimage::decode(&mut reader)?;
 ```
 
+Use `kimage::decode_native` when you need format-specific values such as Netpbm
+`maxval` or PAM tuple metadata:
+
+```rust
+let native = kimage::decode_native(&mut reader)?;
+let image = native.to_image()?;
+```
+
 For format-specific behavior, use the modules under `kimage::codecs`.
 
 ## Current Format Support
@@ -19,6 +27,7 @@ For format-specific behavior, use the modules under `kimage::codecs`.
 The current implementations intentionally cover only small, early subsets of each format.
 
 Top-level `kimage::decode` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, PAM P7, and BMP.
+Top-level `kimage::decode_native` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, and PAM P7.
 
 ### PBM / PGM / PPM
 

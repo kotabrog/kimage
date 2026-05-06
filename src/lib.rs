@@ -7,5 +7,5 @@ mod image;
 mod io;
 
 pub use error::{ImageError, Result};
-pub use format::decode;
+pub use format::{NativeImage, decode, decode_native};
 pub use image::{Image, ImageView, PixelFormat};
