@@ -4,9 +4,21 @@
 
 The first goal is to define a minimal crate structure and then grow support from simple formats such as PPM and BMP before considering PNG.
 
+## Basic Usage
+
+Use `kimage::decode` to read a supported image by detecting its magic number:
+
+```rust
+let image = kimage::decode(&mut reader)?;
+```
+
+For format-specific behavior, use the modules under `kimage::codecs`.
+
 ## Current Format Support
 
 The current implementations intentionally cover only small, early subsets of each format.
+
+Top-level `kimage::decode` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, PAM P7, and BMP.
 
 ### PBM / PGM / PPM
 
