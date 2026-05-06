@@ -26,6 +26,14 @@ Use `kimage::decode_all_native` to read multi-image binary PNM or PAM streams:
 let images = kimage::decode_all_native(&mut reader)?;
 ```
 
+Use `kimage::encode_native` and `kimage::encode_all_native` to write native
+Netpbm or PAM values:
+
+```rust
+kimage::encode_native(&mut writer, &native)?;
+kimage::encode_all_native(&mut writer, &images)?;
+```
+
 For format-specific behavior, use the modules under `kimage::codecs`.
 
 ## Current Format Support
@@ -35,6 +43,7 @@ The current implementations intentionally cover only small, early subsets of eac
 Top-level `kimage::decode` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, PAM P7, and BMP.
 Top-level `kimage::decode_native` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, and PAM P7.
 Top-level `kimage::decode_all_native` supports multi-image PBM P4, PGM P5, PPM P6, and PAM P7 streams.
+Top-level `kimage::encode_native` and `kimage::encode_all_native` support binary PBM P4, PGM P5, PPM P6, and PAM P7.
 
 ### PBM / PGM / PPM
 

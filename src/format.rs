@@ -1,4 +1,4 @@
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 
 use crate::codecs::{NetpbmImage, PamImage, bmp, pam, pbm, pgm, pnm, ppm};
 use crate::{Image, ImageError, Result};
@@ -58,6 +58,51 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NativeImage>> {
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
     decode_all_native_from_slice(&data)
+}
+
+/// Encodes a native image by using the format represented by the image value.
+pub fn encode_native<W: Write>(writer: &mut W, image: &NativeImage) -> Result<()> {
+    match image {
+        NativeImage::Netpbm(image) => pnm::encode_native(writer, image),
+        NativeImage::Pam(image) => pam::encode_native(writer, image),
+    }
+}
+
+/// Encodes native images as a multi-image stream.
+///
+/// All images must belong to the same native format family. Netpbm streams must
+/// also use the same PBM, PGM, or PPM subformat.
+pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NativeImage]) -> Result<()> {
+    let Some(first) = images.first() else {
+        return Ok(());
+    };
+
+    let mut buffer = Vec::new();
+    match first {
+        NativeImage::Netpbm(_) => {
+            let images = images
+                .iter()
+                .map(|image| match image {
+                    NativeImage::Netpbm(image) => Ok(image.clone()),
+                    NativeImage::Pam(_) => Err(ImageError::UnsupportedFormat),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            pnm::encode_all_native(&mut buffer, &images)?;
+        }
+        NativeImage::Pam(_) => {
+            let images = images
+                .iter()
+                .map(|image| match image {
+                    NativeImage::Pam(image) => Ok(image.clone()),
+                    NativeImage::Netpbm(_) => Err(ImageError::UnsupportedFormat),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            pam::encode_all_native(&mut buffer, &images)?;
+        }
+    }
+
+    writer.write_all(&buffer)?;
+    Ok(())
 }
 
 fn decode_from_slice(data: &[u8]) -> Result<Image> {
@@ -457,5 +502,137 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn encode_native_writes_netpbm_image() {
+        let image = NativeImage::Netpbm(NetpbmImage::Pgm {
+            width: 1,
+            height: 1,
+            maxval: 15,
+            data: vec![15],
+        });
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(decode_native(&mut Cursor::new(output)).unwrap(), image);
+    }
+
+    #[test]
+    fn encode_native_writes_pam_image() {
+        let image = NativeImage::Pam(PamImage {
+            width: 1,
+            height: 1,
+            depth: 3,
+            maxval: 255,
+            tuple_type: Some(PamTupleType::Rgb),
+            data: vec![255, 0, 128],
+        });
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(decode_native(&mut Cursor::new(output)).unwrap(), image);
+    }
+
+    #[test]
+    fn encode_all_native_writes_empty_stream_for_empty_slice() {
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &[]).unwrap();
+
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_native_writes_netpbm_stream() {
+        let images = [
+            NativeImage::Netpbm(NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![255, 0, 128],
+            }),
+            NativeImage::Netpbm(NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![0, 128, 255],
+            }),
+        ];
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &images).unwrap();
+
+        assert_eq!(decode_all_native(&mut Cursor::new(output)).unwrap(), images);
+    }
+
+    #[test]
+    fn encode_all_native_writes_pam_stream() {
+        let image = NativeImage::Pam(PamImage {
+            width: 1,
+            height: 1,
+            depth: 3,
+            maxval: 255,
+            tuple_type: Some(PamTupleType::Rgb),
+            data: vec![255, 0, 128],
+        });
+        let images = [image.clone(), image];
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &images).unwrap();
+
+        assert_eq!(decode_all_native(&mut Cursor::new(output)).unwrap(), images);
+    }
+
+    #[test]
+    fn encode_all_native_rejects_mixed_native_families_without_writing() {
+        let images = [
+            NativeImage::Netpbm(NetpbmImage::Pgm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![128],
+            }),
+            NativeImage::Pam(PamImage {
+                width: 1,
+                height: 1,
+                depth: 1,
+                maxval: 255,
+                tuple_type: Some(PamTupleType::Grayscale),
+                data: vec![128],
+            }),
+        ];
+        let mut output = b"unchanged".to_vec();
+
+        let error = encode_all_native(&mut output, &images).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+        assert_eq!(output, b"unchanged");
+    }
+
+    #[test]
+    fn encode_all_native_rejects_mixed_netpbm_subformats_without_writing() {
+        let images = [
+            NativeImage::Netpbm(NetpbmImage::Pgm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![128],
+            }),
+            NativeImage::Netpbm(NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![128, 0, 255],
+            }),
+        ];
+        let mut output = b"unchanged".to_vec();
+
+        let error = encode_all_native(&mut output, &images).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+        assert_eq!(output, b"unchanged");
     }
 }

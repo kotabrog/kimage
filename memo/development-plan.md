@@ -540,29 +540,33 @@ public API の個別対応候補:
 - encode のトップレベル API を同時に追加するか
   - decode は magic number で自動判定できるが、encode は出力形式指定が必要
   - `ImageFormat` と `PnmEncodeFormat` / `PamEncodeTupleType` の関係を整理する必要がある
-  - 初期実装では追加しない
+  - `ImageView` 向けの `encode` は形式指定が必要なため、初期実装では追加しない
+  - native 値は形式を値から判定できるため、`encode_native` / `encode_all_native` のみ追加する
 - module 配置をどうするか
   - crate root に `decode`, `decode_from_memory`, `detect_format`, `ImageFormat` を置くか
   - `format.rs` や `codec.rs` のような新moduleに分け、crate root で re-export するか
-  - 初期実装では `src/format.rs` に private helper を置き、crate root から `decode`, `decode_native`, `decode_all_native`, `NativeImage` を re-export する
+  - 初期実装では `src/format.rs` に private helper を置き、crate root から `decode`, `decode_native`, `decode_all_native`, `encode_native`, `encode_all_native`, `NativeImage` を re-export する
 - 形式判定できない入力をどう扱うか
   - 空入力、1 byte だけの入力、未知の magic number は `ImageError::UnsupportedFormat` にする
   - magic number が判定できた後の壊れたヘッダや不足データは、各 codec のエラーに任せる
 
 初期実装の推奨:
 
-- 公開APIは `pub fn decode<R: Read>(reader: &mut R) -> Result<Image>`、`pub fn decode_native<R: Read>(reader: &mut R) -> Result<NativeImage>`、`pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NativeImage>>` にする
+- 公開APIは `pub fn decode<R: Read>(reader: &mut R) -> Result<Image>`、`pub fn decode_native<R: Read>(reader: &mut R) -> Result<NativeImage>`、`pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NativeImage>>`、`pub fn encode_native<W: Write>(writer: &mut W, image: &NativeImage) -> Result<()>`、`pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NativeImage]) -> Result<()>` にする
 - `NativeImage` は `Netpbm(NetpbmImage)` と `Pam(PamImage)` を持つ enum にする
 - `NativeImage::to_image()` で generic な `Image` へ変換できるようにする
 - `decode_all_native` は P4 / P5 / P6 / P7 を対象にし、空入力は `Ok(Vec::new())` にする
 - `decode_all_native` で P1 / P2 / P3 / BMP が入力された場合は `ImageError::UnsupportedFormat` にする
+- `encode_native` は `NativeImage` の variant に応じて binary PNM P4/P5/P6 または PAM P7 を書く
+- `encode_all_native` は空sliceなら何も書かず、NetpbmのみまたはPAMのみのstreamを書き、Netpbm/PAM混在は `ImageError::UnsupportedFormat` にする
+- `encode_all_native` の Netpbm stream は既存の `pnm::encode_all_native` と同じく同一subformatのみにする
 - 内部では具体形式まで表す private `ImageFormat` enum を使う
 - 内部 helper として `detect_format(data: &[u8]) -> Result<ImageFormat>` を置く
 - 内部 helper として `decode_from_slice(data: &[u8]) -> Result<Image>` を置く
 - `decode<R: Read>` は内部で全体を読み、`decode_from_slice` に委譲する
 - 形式判定できない入力は `ImageError::UnsupportedFormat` にする
 - `decode_native` で BMP が入力された場合は、BMP native 型がないため `ImageError::UnsupportedFormat` にする
-- `ImageFormat`, `detect_format`, `decode_from_slice`, `decode_all`, encode は公開しない
+- `ImageFormat`, `detect_format`, `decode_from_slice`, `decode_all`, generic `encode` は公開しない
 
 ## 初回リリース後の候補
 
