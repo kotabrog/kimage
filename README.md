@@ -102,6 +102,16 @@ Unsupported:
 
 ## Examples
 
+### Top-level API
+
+Run the top-level encode roundtrip example to write and read back PNM, PAM, and BMP files using `kimage::encode` and `kimage::decode`:
+
+```sh
+cargo run --example top_level_encode_roundtrip
+```
+
+The example writes `target/examples/top_level_encode_roundtrip.ppm`, `target/examples/top_level_encode_roundtrip.pam`, and `target/examples/top_level_encode_roundtrip.bmp`. If `pamtopng` is available, it also writes `target/examples/top_level_encode_roundtrip_pam.png`.
+
 ### PBM
 
 Run the ASCII PBM P1 roundtrip example to write and read back a small black-and-white checker image:
