@@ -499,6 +499,54 @@ public API の個別対応候補:
 - 最後に `make ci` を通す
 - 必要に応じて `cargo package --list` で crate に含まれるファイルを確認する
 
+トップレベルAPI追加の検討項目:
+
+初回リリース前に、形式別 codec API に加えて `kimage::decode` のような利用者向け入口を追加するか検討する。
+
+目的:
+
+- 利用者が事前に形式を判定せずに画像を読み込めるようにする
+- PNM / PAM / BMP の形式判定ロジックを crate 側に集約する
+- 将来的な PNG 追加時にも同じ入口を使えるようにする
+
+論点:
+
+- `ImageFormat` enum を追加するか
+  - 追加する場合、`Pnm`, `Pam`, `Bmp` のような粗い分類にするか、`PbmAscii`, `PgmBinary`, `Pam`, `Bmp` のように具体形式まで持つか
+- 形式判定 API を公開するか
+  - 候補: `detect_format(data: &[u8]) -> Result<ImageFormat>`
+  - decode 内部専用に留める選択もある
+- decode 入力をどう扱うか
+  - `Read` から全体を読み込んで判定する単純な実装にするか
+  - `BufRead` などを要求して先頭 bytes を覗く形にするか
+  - 現状の codec 実装は全体を読むものが多いため、初期実装では全体読み込みが自然
+- memory 入力 API を追加するか
+  - 候補: `decode_from_memory(data: &[u8]) -> Result<Image>`
+  - `decode<R: Read>` は内部で全体を読み、`decode_from_memory` に委譲する
+- multi-image のトップレベル API を同時に追加するか
+  - 候補: `decode_all<R: Read>(reader: &mut R) -> Result<Vec<Image>>`
+  - 対応形式は P4 / P5 / P6 / PAM P7 に限る
+  - BMP は単一画像形式として扱う
+- native decode のトップレベル API を追加するか
+  - PNM は `NetpbmImage`、PAM は `PamImage`、BMP は native 型がない
+  - 戻り型が分かれるため、追加するなら別 enum が必要になる
+  - 初期実装では正規化済み `Image` の decode のみに絞るのがよい
+- encode のトップレベル API を同時に追加するか
+  - decode は magic number で自動判定できるが、encode は出力形式指定が必要
+  - `ImageFormat` と `PnmEncodeFormat` / `PamEncodeTupleType` の関係を整理する必要がある
+  - 初期実装では encode は後回しにし、decode 系から始めるのがよい
+- module 配置をどうするか
+  - crate root に `decode`, `decode_from_memory`, `detect_format`, `ImageFormat` を置くか
+  - `format.rs` や `codec.rs` のような新moduleに分け、crate root で re-export するか
+
+初期実装の推奨:
+
+- `ImageFormat` は具体形式まで表す enum にする
+- `detect_format(data: &[u8]) -> Result<ImageFormat>` を追加する
+- `decode_from_memory(data: &[u8]) -> Result<Image>` を追加する
+- `decode<R: Read>(reader: &mut R) -> Result<Image>` を追加し、内部で全体を読む
+- `decode_all`, native decode, encode は別判断にする
+
 ## 初回リリース後の候補
 
 Netpbm の対応範囲が固まった後に、PNG の最小 encoder へ進む。
