@@ -8,6 +8,7 @@ mod io;
 
 pub use error::{ImageError, Result};
 pub use format::{
-    NativeImage, decode, decode_all_native, decode_native, encode_all_native, encode_native,
+    EncodeFormat, NativeImage, decode, decode_all_native, decode_native, encode, encode_all_native,
+    encode_native,
 };
 pub use image::{Image, ImageView, PixelFormat};

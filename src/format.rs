@@ -1,7 +1,7 @@
 use std::io::{Cursor, Read, Write};
 
-use crate::codecs::{NetpbmImage, PamImage, bmp, pam, pbm, pgm, pnm, ppm};
-use crate::{Image, ImageError, Result};
+use crate::codecs::{NetpbmImage, PamEncodeTupleType, PamImage, bmp, pam, pbm, pgm, pnm, ppm};
+use crate::{Image, ImageError, ImageView, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ImageFormat {
@@ -20,6 +20,14 @@ enum ImageFormat {
 pub enum NativeImage {
     Netpbm(NetpbmImage),
     Pam(PamImage),
+}
+
+/// Output format used when encoding a generic image view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EncodeFormat {
+    Pnm(pnm::PnmEncodeFormat),
+    Pam(PamEncodeTupleType),
+    Bmp,
 }
 
 impl NativeImage {
@@ -58,6 +66,19 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NativeImage>> {
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
     decode_all_native_from_slice(&data)
+}
+
+/// Encodes an image view using an explicitly selected output format.
+pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>, format: EncodeFormat) -> Result<()> {
+    let mut buffer = Vec::new();
+    match format {
+        EncodeFormat::Pnm(format) => pnm::encode(&mut buffer, image, format)?,
+        EncodeFormat::Pam(tuple_type) => pam::encode(&mut buffer, image, tuple_type)?,
+        EncodeFormat::Bmp => bmp::encode(&mut buffer, image)?,
+    }
+
+    writer.write_all(&buffer)?;
+    Ok(())
 }
 
 /// Encodes a native image by using the format represented by the image value.
@@ -187,6 +208,7 @@ mod tests {
     use std::io::Cursor;
 
     use crate::PixelFormat;
+    use crate::codecs::pnm::PnmEncodeFormat;
     use crate::codecs::{NetpbmImage, PamTupleType};
 
     use super::*;
@@ -502,6 +524,82 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn encode_writes_pnm_image() {
+        let image = Image::new(1, 1, PixelFormat::Rgb8, vec![255, 0, 128]).unwrap();
+        let mut output = Vec::new();
+
+        encode(
+            &mut output,
+            image.as_view(),
+            EncodeFormat::Pnm(PnmEncodeFormat::PpmBinary),
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode_native(&mut Cursor::new(output)).unwrap(),
+            NativeImage::Netpbm(NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![255, 0, 128],
+            })
+        );
+    }
+
+    #[test]
+    fn encode_writes_pam_image() {
+        let image = Image::new(1, 1, PixelFormat::Rgb8, vec![255, 0, 128]).unwrap();
+        let mut output = Vec::new();
+
+        encode(
+            &mut output,
+            image.as_view(),
+            EncodeFormat::Pam(PamEncodeTupleType::Rgb),
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode_native(&mut Cursor::new(output)).unwrap(),
+            NativeImage::Pam(PamImage {
+                width: 1,
+                height: 1,
+                depth: 3,
+                maxval: 255,
+                tuple_type: Some(PamTupleType::Rgb),
+                data: vec![255, 0, 128],
+            })
+        );
+    }
+
+    #[test]
+    fn encode_writes_bmp_image() {
+        let image = Image::new(1, 1, PixelFormat::Rgb8, vec![255, 0, 128]).unwrap();
+        let mut output = Vec::new();
+
+        encode(&mut output, image.as_view(), EncodeFormat::Bmp).unwrap();
+
+        let decoded = decode(&mut Cursor::new(output)).unwrap();
+        assert_eq!(decoded.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(decoded.data, [255, 0, 128]);
+    }
+
+    #[test]
+    fn encode_rejects_mismatched_format_without_writing() {
+        let image = Image::new(1, 1, PixelFormat::Gray8, vec![128]).unwrap();
+        let mut output = b"unchanged".to_vec();
+
+        let error = encode(&mut output, image.as_view(), EncodeFormat::Bmp).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::UnsupportedPixelFormat {
+                pixel_format: PixelFormat::Gray8
+            }
+        );
+        assert_eq!(output, b"unchanged");
     }
 
     #[test]
