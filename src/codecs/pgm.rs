@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, NetpbmImage, gray_image_to_pgm_native, raster_slice, read_any_sample_header,
+    HeaderParser, NetpbmImage, image_view_to_pgm_native, raster_slice, read_any_sample_header,
     read_ascii_sample_bytes_with_max_value, validate_image_view, write_packed_rows,
     write_sample_header_with_max_value,
 };
@@ -39,6 +39,17 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NetpbmImage>> {
     }
 
     Ok(images)
+}
+
+/// Decodes all binary PGM P5 images from a multi-image stream.
+///
+/// This implementation normalizes PGM samples to `PixelFormat::Gray8` or
+/// `PixelFormat::Gray16`.
+pub fn decode_all<R: Read>(reader: &mut R) -> Result<Vec<Image>> {
+    decode_all_native(reader)?
+        .into_iter()
+        .map(Image::try_from)
+        .collect()
 }
 
 fn decode_one_native(data: &[u8], parser: &mut HeaderParser<'_>) -> Result<NetpbmImage> {
@@ -151,7 +162,7 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
 pub fn encode_all<W: Write>(writer: &mut W, images: &[ImageView<'_>]) -> Result<()> {
     let images = images
         .iter()
-        .map(|image| gray_image_to_pgm_native(*image))
+        .map(|image| image_view_to_pgm_native(*image))
         .collect::<Result<Vec<_>>>()?;
 
     encode_all_native(writer, &images)
@@ -401,6 +412,18 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn decode_all_reads_normalized_pgm_p5_images() {
+        let input = b"P5\n2 1\n15\n\x00\x0fP5\n1 1\n255\n\x80";
+        let images = decode_all(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].pixel_format, PixelFormat::Gray8);
+        assert_eq!(images[0].data, [0, 255]);
+        assert_eq!(images[1].pixel_format, PixelFormat::Gray8);
+        assert_eq!(images[1].data, [128]);
     }
 
     #[test]

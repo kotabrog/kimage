@@ -4,9 +4,67 @@
 
 The first goal is to define a minimal crate structure and then grow support from simple formats such as PPM and BMP before considering PNG.
 
+## Basic Usage
+
+Use `kimage::decode` to read a supported image by detecting its magic number:
+
+```rust
+let image = kimage::decode(&mut reader)?;
+```
+
+Use `kimage::decode_native` when you need format-specific values such as Netpbm
+`maxval` or PAM tuple metadata:
+
+```rust
+let native = kimage::decode_native(&mut reader)?;
+let image = native.to_image()?;
+```
+
+Use `kimage::decode_all_native` to read multi-image binary PNM or PAM streams:
+
+```rust
+let images = kimage::decode_all_native(&mut reader)?;
+```
+
+Use `kimage::encode` with an explicit `EncodeFormat` to write a generic image
+view:
+
+```rust
+kimage::encode(&mut writer, image.as_view(), kimage::EncodeFormat::Bmp)?;
+```
+
+Use `kimage::encode_native` and `kimage::encode_all_native` to write native
+Netpbm or PAM values:
+
+```rust
+kimage::encode_native(&mut writer, &native)?;
+kimage::encode_all_native(&mut writer, &images)?;
+```
+
+For format-specific behavior, use the modules under `kimage::codecs`.
+
+## Cargo Features
+
+Default features enable all currently supported format families:
+
+```toml
+default = ["bmp", "netpbm"]
+```
+
+Available features:
+
+- `bmp`: enables BMP codec support
+- `netpbm`: enables PBM, PGM, PPM, PNM, and PAM codec support
+
 ## Current Format Support
 
 The current implementations intentionally cover only small, early subsets of each format.
+
+Top-level `kimage::decode` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, PAM P7, and BMP.
+Top-level `kimage::decode_native` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, and PAM P7.
+Top-level `kimage::decode_all_native` supports multi-image PBM P4, PGM P5, PPM P6, and PAM P7 streams.
+Top-level `kimage::encode` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, PAM P7, and BMP.
+Top-level `kimage::encode_native` and `kimage::encode_all_native` support binary PBM P4, PGM P5, PPM P6, and PAM P7.
 
 ### PBM / PGM / PPM
 
@@ -23,14 +81,14 @@ Supported:
 - native PGM/PPM APIs that preserve `maxval` and sample values
 - conversion APIs between `NetpbmImage` and `Image` / `ImageView`
 - PNM decode APIs that auto-detect P1 through P6 and encode APIs that select P1 through P6
-- native multi-image streams for binary PBM P4, PGM P5, and PPM P6
+- normalized and native multi-image streams for binary PBM P4, PGM P5, and PPM P6
 
 ### PAM
 
 Supported:
 
 - PAM P7 native decode and encode
-- PAM P7 native multi-image streams
+- PAM P7 normalized and native multi-image streams
 - `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, `RGB_ALPHA`, and unknown `TUPLTYPE` in native APIs
 - `BLACKANDWHITE`, `GRAYSCALE`, `RGB`, `BLACKANDWHITE_ALPHA`, `GRAYSCALE_ALPHA`, and `RGB_ALPHA` conversion to `Image`
 - explicit PAM tuple type selection for `ImageView` encode
@@ -56,6 +114,16 @@ Unsupported:
 - color profiles and metadata
 
 ## Examples
+
+### Top-level API
+
+Run the top-level encode roundtrip example to write and read back PNM, PAM, and BMP files using `kimage::encode` and `kimage::decode`:
+
+```sh
+cargo run --example top_level_encode_roundtrip
+```
+
+The example writes `target/examples/top_level_encode_roundtrip.ppm`, `target/examples/top_level_encode_roundtrip.pam`, and `target/examples/top_level_encode_roundtrip.bmp`. If `pamtopng` is available, it also writes `target/examples/top_level_encode_roundtrip_pam.png`.
 
 ### PBM
 

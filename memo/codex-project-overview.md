@@ -31,7 +31,7 @@
 - PNM
   - P1..P6 の自動判別 decode
   - P1..P6 の明示指定 encode
-  - P4 / P5 / P6 の multi-image stream
+  - P4 / P5 / P6 の正規化済み / native multi-image stream
 - BMP
   - 24-bit uncompressed bottom-up
   - `BITMAPINFOHEADER`
@@ -40,19 +40,17 @@
 
 ## 次の目標
 
-次は Netpbm 系フォーマットについて、仕様上の残りを実装計画に落とし込み、初回リリース前に対応範囲を広げる。
+次は初回の仮リリースに向けて、実装済みの Netpbm / PAM / BMP 対応範囲を README と計画メモに正確に反映する。
+
+この段階では PNG などの新形式には進まず、`develop` から `main` へ持っていける状態に整える。
 
 対象:
 
-- parser の仕様追従
-- PGM / PPM の `maxval` 1..=65535
-- PGM / PPM の 16-bit sample
-- Netpbm の `maxval` を保持する native image 型
-- native image から汎用 `Image` への正規化変換
-- 複数画像を連結した Netpbm stream
-- PAM P7
-
-README とリリース準備は、Netpbm の残作業が完了してから行う。
+- README の対応表と examples の整理
+- public API の名前と公開範囲の軽い棚卸し
+- `memo/` の完了済みタスクと初回リリース後タスクの整理
+- license file と Cargo metadata の確認
+- examples と CI の実行確認
 
 ## 設計方針
 
@@ -171,9 +169,10 @@ src/
 
 - PBM / PGM / PPM / PAM は、それぞれ同一subformatの画像を区切りなしで複数連結できる。
 - Plain PBM / PGM / PPM は仕様上、1ファイル1画像として扱う。
-- `pbm::decode_all_native`, `pgm::decode_all_native`, `ppm::decode_all_native` は同一subformatのstreamを扱う。
+- `pbm::decode_all`, `pgm::decode_all`, `ppm::decode_all` は同一subformatのstreamを正規化済み `Image` として扱う。
+- `pbm::decode_all_native`, `pgm::decode_all_native`, `ppm::decode_all_native` は同一subformatのstreamを native image として扱う。
 - P1 / P2 / P3 の複数画像風入力は、仕様重視でエラーにする。
-- `pnm::decode_all_native` は最初のmagic numberでsubformatを決め、そのsubformatのstreamとして読む。異なるsubformatの混在streamを標準対応しない。
+- `pnm::decode_all`, `pnm::decode_all_native` は最初のmagic numberでsubformatを決め、そのsubformatのstreamとして読む。異なるsubformatの混在streamを標準対応しない。
 - Netpbm の whitespace は space, TAB, CR, LF, VT, FF。
 - コメントは `#` から次の CR または LF の直前まで。
 - PBM P4 は1bit/pixelで、各行は8bit単位に詰める。余ったbitは don't care。

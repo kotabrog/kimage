@@ -1,9 +1,9 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    HeaderParser, NetpbmImage, raster_slice, read_any_sample_header,
-    read_ascii_sample_bytes_with_max_value, rgb_image_to_ppm_native, validate_image_view,
-    write_packed_rows, write_sample_header_with_max_value,
+    HeaderParser, NetpbmImage, image_view_to_ppm_native, raster_slice, read_any_sample_header,
+    read_ascii_sample_bytes_with_max_value, validate_image_view, write_packed_rows,
+    write_sample_header_with_max_value,
 };
 use crate::{Image, ImageError, ImageView, PixelFormat, Result};
 
@@ -39,6 +39,17 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NetpbmImage>> {
     }
 
     Ok(images)
+}
+
+/// Decodes all binary PPM P6 images from a multi-image stream.
+///
+/// This implementation normalizes PPM samples to `PixelFormat::Rgb8` or
+/// `PixelFormat::Rgb16`.
+pub fn decode_all<R: Read>(reader: &mut R) -> Result<Vec<Image>> {
+    decode_all_native(reader)?
+        .into_iter()
+        .map(Image::try_from)
+        .collect()
 }
 
 fn decode_one_native(data: &[u8], parser: &mut HeaderParser<'_>) -> Result<NetpbmImage> {
@@ -155,7 +166,7 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
 pub fn encode_all<W: Write>(writer: &mut W, images: &[ImageView<'_>]) -> Result<()> {
     let images = images
         .iter()
-        .map(|image| rgb_image_to_ppm_native(*image))
+        .map(|image| image_view_to_ppm_native(*image))
         .collect::<Result<Vec<_>>>()?;
 
     encode_all_native(writer, &images)
@@ -402,6 +413,18 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn decode_all_reads_normalized_ppm_p6_images() {
+        let input = b"P6\n1 1\n15\n\x0f\0\x05P6\n1 1\n255\n\x01\x02\x03";
+        let images = decode_all(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].pixel_format, PixelFormat::Rgb8);
+        assert_eq!(images[0].data, [255, 0, 85]);
+        assert_eq!(images[1].pixel_format, PixelFormat::Rgb8);
+        assert_eq!(images[1].data, [1, 2, 3]);
     }
 
     #[test]

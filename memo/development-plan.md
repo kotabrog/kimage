@@ -263,8 +263,12 @@ impl NetpbmImage {
 ```
 
 ```rust
-pub fn gray_image_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
-pub fn rgb_image_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+pub fn image_view_to_pgm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+pub fn image_view_to_ppm_native(image: ImageView<'_>) -> Result<NetpbmImage>;
+pub fn image_view_to_pam_native(
+    image: ImageView<'_>,
+    tuple_type: PamEncodeTupleType,
+) -> Result<PamImage>;
 ```
 
 想定するテスト:
@@ -440,6 +444,139 @@ Netpbm の対応範囲を反映したうえで、初回の仮リリースとし�
 - `develop` から `main` への PR を準備する
 
 この段階では、PNG にはまだ進まない。
+
+詳細方針:
+
+- 新機能追加ではなく、説明・計画・公開APIの整理に集中する
+- README は利用者が現在の対応範囲を把握しやすい形にする
+- `memo/` は「完了済み」と「初回リリース後」を分け、次の作業が読み取れる状態にする
+- public API は大きく作り替えず、初回リリース前に破壊的変更すべきものがないか軽く棚卸しする
+- examples と CI を実行し、README に載せている内容が実際に動くことを確認する
+
+README で確認・整理する項目:
+
+- 対応形式を表または読みやすいセクションで整理する
+- PBM / PGM / PPM / PNM / PAM / BMP の supported / unsupported を最新実装に合わせる
+- 通常 API と native API の違いを短く説明する
+- `Image` / `ImageView` / `PixelFormat` の役割を最小限説明する
+- examples の一覧を出力ファイル名付きで整理する
+- PNM は P1..P6 の上位API、PAM は P7 専用APIであることを明確にする
+
+public API の確認項目:
+
+- `pub mod io` を公開 API として残すか判断する
+- `codecs::netpbm` は private のまま、`NetpbmImage` と変換関数だけ re-export する形でよいか確認する
+- `PnmEncodeFormat` / `PamEncodeTupleType` の命名を初回リリース前に確認する
+- `decode_all` / `decode_all_native` / `encode_all` / `encode_all_native` の命名が形式間で揃っているか確認する
+- `ImageError` の variant と message が利用者に伝わるものになっているか確認する
+
+public API の個別対応候補:
+
+- `io` module は内部 endian helper として扱い、crate root から公開しない
+- `decode_all` の有無を形式間で揃える
+  - `pam` は `decode_all` / `decode_all_native` を持つ
+  - `pbm` / `pgm` / `ppm` / `pnm` にも正規化済み `decode_all` を追加し、形式間で揃える
+- `ImageError::Io` は `std::io::Error` を保持し、`Error::source()` から元の IO error を参照できる形にする
+  - `Clone` / `Eq` は実装しない
+  - 非IOエラーのテストや比較用途のため、`PartialEq` は手書きで維持する
+- `image_view_to_pbm_native`, `image_view_to_pgm_native`, `image_view_to_ppm_native`, `image_view_to_pam_native` に名前を揃える
+  - `ImageView` から native image 型へ変換する helper として公開する
+  - 将来的に `TryFrom` などの変換APIを追加する余地は残す
+- `Image` / `ImageView` の public field 方針を確認する
+  - 現状は小さい画像バッファ型として扱いやすい
+  - 不変条件をより強く守る設計にするなら getter 中心も候補だが、初回リリースでは現状維持を基本にする
+
+リポジトリ・crate metadata の確認項目:
+
+- `Cargo.toml` の `description`, `repository`, `readme`, `license` を確認する
+- `license = "MIT OR Apache-2.0"` に合わせ、`LICENSE-MIT` / `LICENSE-APACHE` の追加を検討する
+- crates.io publish を急がない場合、`keywords` / `categories` は必須にしない
+
+動作確認:
+
+- README に載せている examples を一通り実行する
+- `pamtopng` や `pamsplit` など外部コマンドがない環境でも example が失敗しないことを確認する
+- 最後に `make ci` を通す
+- 必要に応じて `cargo package --list` で crate に含まれるファイルを確認する
+
+Cargo feature 方針:
+
+- default features は `["bmp", "netpbm"]` にする
+- `bmp` feature は BMP codec と BMP 用 endian helper を有効にする
+- `netpbm` feature は PBM / PGM / PPM / PNM / PAM と Netpbm 共通処理を有効にする
+- feature を細かく PBM / PGM / PPM / PAM に分けるのは、共通 parser や native 型の cfg が増えるため初回リリースでは行わない
+- examples は `required-features` を設定し、無効な形式の example を feature 無効時の build 対象から外す
+- `make ci` では default の lint/test に加え、`--no-default-features`, `--features bmp`, `--features netpbm` の clippy を通す
+
+トップレベルAPI追加の検討項目:
+
+初回リリース前に、形式別 codec API に加えて `kimage::decode` の利用者向け入口を追加する。
+
+目的:
+
+- 利用者が事前に形式を判定せずに画像を読み込めるようにする
+- PNM / PAM / BMP の形式判定ロジックを crate 側に集約する
+- 将来的な PNG 追加時にも同じ入口を使えるようにする
+
+論点と判断:
+
+- `ImageFormat` enum を追加するか
+  - 初期実装では private enum として追加する
+  - 公開しないため、粒度は内部実装に都合のよい具体形式単位にする
+- 形式判定 API を公開するか
+  - 候補: `detect_format(data: &[u8]) -> Result<ImageFormat>`
+  - 初期実装では公開せず、decode 内部専用にする
+- decode 入力をどう扱うか
+  - `Read` から全体を読み込んで判定する単純な実装にするか
+  - `BufRead` などを要求して先頭 bytes を覗く形にするか
+  - 現状の codec 実装は全体を読むものが多いため、初期実装では全体読み込みが自然
+- memory 入力 API を追加するか
+  - 候補: `decode_from_memory(data: &[u8]) -> Result<Image>`
+  - 初期実装では公開しない
+  - private helper としては `decode_from_slice(data: &[u8]) -> Result<Image>` を置く
+  - `decode<R: Read>` は内部で全体を読み、private helper に委譲する
+- multi-image のトップレベル API を同時に追加するか
+  - 候補: `decode_all<R: Read>(reader: &mut R) -> Result<Vec<Image>>`
+  - 対応形式は P4 / P5 / P6 / PAM P7 に限る
+  - BMP は単一画像形式として扱う
+  - `Image` への変換方法が曖昧な場合があるため、初期実装では `decode_all` は追加しない
+  - native 値を保持する `decode_all_native` のみ追加する
+- native decode のトップレベル API を追加するか
+  - PNM は `NetpbmImage`、PAM は `PamImage`、BMP は native 型がない
+  - 戻り型が分かれるため、追加するなら別 enum が必要になる
+  - `NativeImage` enum を追加し、`Netpbm(NetpbmImage)` と `Pam(PamImage)` を保持する
+  - BMP は native 型がないため、`decode_native` では `UnsupportedFormat` にする
+- encode のトップレベル API を同時に追加するか
+  - decode は magic number で自動判定できるが、encode は出力形式指定が必要
+  - `ImageFormat` と `PnmEncodeFormat` / `PamEncodeTupleType` の関係を整理する必要がある
+  - `ImageView` 向けの `encode` は `EncodeFormat` で形式指定する
+  - native 値は形式を値から判定できるため、`encode_native` / `encode_all_native` も追加する
+- module 配置をどうするか
+  - crate root に `decode`, `decode_from_memory`, `detect_format`, `ImageFormat` を置くか
+  - `format.rs` や `codec.rs` のような新moduleに分け、crate root で re-export するか
+  - 初期実装では `src/format.rs` に private helper を置き、crate root から `decode`, `decode_native`, `decode_all_native`, `encode`, `encode_native`, `encode_all_native`, `EncodeFormat`, `NativeImage` を re-export する
+- 形式判定できない入力をどう扱うか
+  - 空入力、1 byte だけの入力、未知の magic number は `ImageError::UnsupportedFormat` にする
+  - magic number が判定できた後の壊れたヘッダや不足データは、各 codec のエラーに任せる
+
+初期実装の推奨:
+
+- 公開APIは `pub fn decode<R: Read>(reader: &mut R) -> Result<Image>`、`pub fn decode_native<R: Read>(reader: &mut R) -> Result<NativeImage>`、`pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NativeImage>>`、`pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>, format: EncodeFormat) -> Result<()>`、`pub fn encode_native<W: Write>(writer: &mut W, image: &NativeImage) -> Result<()>`、`pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NativeImage]) -> Result<()>` にする
+- `EncodeFormat` は `Pnm(PnmEncodeFormat)`, `Pam(PamEncodeTupleType)`, `Bmp` を持つ enum にする
+- `NativeImage` は `Netpbm(NetpbmImage)` と `Pam(PamImage)` を持つ enum にする
+- `NativeImage::to_image()` で generic な `Image` へ変換できるようにする
+- `decode_all_native` は P4 / P5 / P6 / P7 を対象にし、空入力は `Ok(Vec::new())` にする
+- `decode_all_native` で P1 / P2 / P3 / BMP が入力された場合は `ImageError::UnsupportedFormat` にする
+- `encode_native` は `NativeImage` の variant に応じて binary PNM P4/P5/P6 または PAM P7 を書く
+- `encode_all_native` は空sliceなら何も書かず、NetpbmのみまたはPAMのみのstreamを書き、Netpbm/PAM混在は `ImageError::UnsupportedFormat` にする
+- `encode_all_native` の Netpbm stream は既存の `pnm::encode_all_native` と同じく同一subformatのみにする
+- 内部では具体形式まで表す private `ImageFormat` enum を使う
+- 内部 helper として `detect_format(data: &[u8]) -> Result<ImageFormat>` を置く
+- 内部 helper として `decode_from_slice(data: &[u8]) -> Result<Image>` を置く
+- `decode<R: Read>` は内部で全体を読み、`decode_from_slice` に委譲する
+- 形式判定できない入力は `ImageError::UnsupportedFormat` にする
+- `decode_native` で BMP が入力された場合は、BMP native 型がないため `ImageError::UnsupportedFormat` にする
+- `ImageFormat`, `detect_format`, `decode_from_slice`, `decode_all`, `encode_all` は公開しない
 
 ## 初回リリース後の候補
 

@@ -1,13 +1,12 @@
 use std::fmt;
-use std::io::ErrorKind;
 
 use crate::PixelFormat;
 
 /// Error type used by image decoding, encoding, and buffer validation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum ImageError {
     /// A lower-level IO operation failed.
-    Io { kind: ErrorKind },
+    Io { source: std::io::Error },
     /// The image header is malformed.
     InvalidHeader { reason: &'static str },
     /// The image payload is malformed.
@@ -28,13 +27,63 @@ pub enum ImageError {
     UnsupportedPixelFormat { pixel_format: PixelFormat },
 }
 
+impl PartialEq for ImageError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Io { source: a }, Self::Io { source: b }) => a.kind() == b.kind(),
+            (Self::InvalidHeader { reason: a }, Self::InvalidHeader { reason: b }) => a == b,
+            (Self::InvalidData { reason: a }, Self::InvalidData { reason: b }) => a == b,
+            (
+                Self::InvalidBufferLength {
+                    expected: a_expected,
+                    actual: a_actual,
+                },
+                Self::InvalidBufferLength {
+                    expected: b_expected,
+                    actual: b_actual,
+                },
+            ) => a_expected == b_expected && a_actual == b_actual,
+            (
+                Self::InvalidStride {
+                    minimum: a_minimum,
+                    actual: a_actual,
+                },
+                Self::InvalidStride {
+                    minimum: b_minimum,
+                    actual: b_actual,
+                },
+            ) => a_minimum == b_minimum && a_actual == b_actual,
+            (
+                Self::ImageDimensionsTooLarge {
+                    width: a_width,
+                    height: a_height,
+                    bytes_per_pixel: a_bytes_per_pixel,
+                },
+                Self::ImageDimensionsTooLarge {
+                    width: b_width,
+                    height: b_height,
+                    bytes_per_pixel: b_bytes_per_pixel,
+                },
+            ) => {
+                a_width == b_width && a_height == b_height && a_bytes_per_pixel == b_bytes_per_pixel
+            }
+            (Self::UnsupportedFormat, Self::UnsupportedFormat) => true,
+            (
+                Self::UnsupportedPixelFormat { pixel_format: a },
+                Self::UnsupportedPixelFormat { pixel_format: b },
+            ) => a == b,
+            _ => false,
+        }
+    }
+}
+
 /// Convenient result type for this crate.
 pub type Result<T> = std::result::Result<T, ImageError>;
 
 impl fmt::Display for ImageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io { kind } => write!(f, "io error: {kind}"),
+            Self::Io { source } => write!(f, "io error: {source}"),
             Self::InvalidHeader { reason } => write!(f, "invalid image header: {reason}"),
             Self::InvalidData { reason } => write!(f, "invalid image data: {reason}"),
             Self::InvalidBufferLength { expected, actual } => {
@@ -67,16 +116,26 @@ impl fmt::Display for ImageError {
     }
 }
 
-impl std::error::Error for ImageError {}
+impl std::error::Error for ImageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io { source } => Some(source),
+            _ => None,
+        }
+    }
+}
 
 impl From<std::io::Error> for ImageError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io { kind: error.kind() }
+    fn from(source: std::io::Error) -> Self {
+        Self::Io { source }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+    use std::io::{Error as IoError, ErrorKind};
+
     use super::*;
 
     #[test]
@@ -90,5 +149,14 @@ mod tests {
             error.to_string(),
             "invalid buffer length: expected 12 bytes, got 10 bytes"
         );
+    }
+
+    #[test]
+    fn io_error_preserves_source() {
+        let error = ImageError::from(IoError::new(ErrorKind::PermissionDenied, "denied"));
+        let source = error.source().unwrap().downcast_ref::<IoError>().unwrap();
+
+        assert_eq!(source.kind(), ErrorKind::PermissionDenied);
+        assert_eq!(source.to_string(), "denied");
     }
 }

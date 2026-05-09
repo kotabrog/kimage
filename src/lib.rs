@@ -2,8 +2,14 @@
 
 pub mod codecs;
 mod error;
+mod format;
 mod image;
-pub mod io;
+#[cfg(feature = "bmp")]
+mod io;
 
 pub use error::{ImageError, Result};
+pub use format::{
+    EncodeFormat, NativeImage, decode, decode_all_native, decode_native, encode, encode_all_native,
+    encode_native,
+};
 pub use image::{Image, ImageView, PixelFormat};

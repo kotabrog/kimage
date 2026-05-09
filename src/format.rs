@@ -1,0 +1,818 @@
+#[cfg(any(feature = "bmp", feature = "netpbm"))]
+use std::io::Cursor;
+use std::io::{Read, Write};
+
+#[cfg(feature = "bmp")]
+use crate::codecs::bmp;
+#[cfg(feature = "netpbm")]
+use crate::codecs::{NetpbmImage, PamEncodeTupleType, PamImage, pam, pbm, pgm, pnm, ppm};
+use crate::{Image, ImageError, ImageView, Result};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImageFormat {
+    #[cfg(feature = "netpbm")]
+    PbmAscii,
+    #[cfg(feature = "netpbm")]
+    PgmAscii,
+    #[cfg(feature = "netpbm")]
+    PpmAscii,
+    #[cfg(feature = "netpbm")]
+    PbmBinary,
+    #[cfg(feature = "netpbm")]
+    PgmBinary,
+    #[cfg(feature = "netpbm")]
+    PpmBinary,
+    #[cfg(feature = "netpbm")]
+    Pam,
+    #[cfg(feature = "bmp")]
+    Bmp,
+}
+
+/// A format-specific image representation that preserves native file values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NativeImage {
+    #[cfg(feature = "netpbm")]
+    Netpbm(NetpbmImage),
+    #[cfg(feature = "netpbm")]
+    Pam(PamImage),
+}
+
+/// Output format used when encoding a generic image view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EncodeFormat {
+    #[cfg(feature = "netpbm")]
+    Pnm(pnm::PnmEncodeFormat),
+    #[cfg(feature = "netpbm")]
+    Pam(PamEncodeTupleType),
+    #[cfg(feature = "bmp")]
+    Bmp,
+}
+
+impl NativeImage {
+    /// Converts this native image into the generic normalized image buffer.
+    pub fn to_image(&self) -> Result<Image> {
+        match self {
+            #[cfg(feature = "netpbm")]
+            Self::Netpbm(image) => image.to_image(),
+            #[cfg(feature = "netpbm")]
+            Self::Pam(image) => image.to_image(),
+            #[allow(unreachable_patterns)]
+            _ => Err(ImageError::UnsupportedFormat),
+        }
+    }
+}
+
+/// Decodes an image by detecting its format from the input bytes.
+pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+    decode_from_slice(&data)
+}
+
+/// Decodes a native image by detecting its format from the input bytes.
+///
+/// BMP does not currently have a native representation and returns
+/// `ImageError::UnsupportedFormat`.
+pub fn decode_native<R: Read>(reader: &mut R) -> Result<NativeImage> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+    decode_native_from_slice(&data)
+}
+
+/// Decodes all native images by detecting the stream format from the input bytes.
+///
+/// This supports multi-image PNM binary streams (P4, P5, P6) and PAM (P7).
+/// Empty input returns an empty vector. Plain PNM formats (P1, P2, P3) and BMP
+/// return `ImageError::UnsupportedFormat`.
+pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NativeImage>> {
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data)?;
+    decode_all_native_from_slice(&data)
+}
+
+/// Encodes an image view using an explicitly selected output format.
+pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>, format: EncodeFormat) -> Result<()> {
+    #[cfg(not(any(feature = "bmp", feature = "netpbm")))]
+    {
+        let _ = (writer, image, format);
+        Err(ImageError::UnsupportedFormat)
+    }
+
+    #[cfg(any(feature = "bmp", feature = "netpbm"))]
+    {
+        let mut buffer = Vec::new();
+        match format {
+            #[cfg(feature = "netpbm")]
+            EncodeFormat::Pnm(format) => pnm::encode(&mut buffer, image, format)?,
+            #[cfg(feature = "netpbm")]
+            EncodeFormat::Pam(tuple_type) => pam::encode(&mut buffer, image, tuple_type)?,
+            #[cfg(feature = "bmp")]
+            EncodeFormat::Bmp => bmp::encode(&mut buffer, image)?,
+        }
+
+        writer.write_all(&buffer)?;
+        Ok(())
+    }
+}
+
+/// Encodes a native image by using the format represented by the image value.
+pub fn encode_native<W: Write>(writer: &mut W, image: &NativeImage) -> Result<()> {
+    match image {
+        #[cfg(feature = "netpbm")]
+        NativeImage::Netpbm(image) => pnm::encode_native(writer, image),
+        #[cfg(feature = "netpbm")]
+        NativeImage::Pam(image) => pam::encode_native(writer, image),
+        #[allow(unreachable_patterns)]
+        _ => {
+            let _ = writer;
+            Err(ImageError::UnsupportedFormat)
+        }
+    }
+}
+
+/// Encodes native images as a multi-image stream.
+///
+/// All images must belong to the same native format family. Netpbm streams must
+/// also use the same PBM, PGM, or PPM subformat.
+pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NativeImage]) -> Result<()> {
+    let Some(first) = images.first() else {
+        return Ok(());
+    };
+
+    #[cfg(not(feature = "netpbm"))]
+    {
+        let _ = (writer, first);
+        Err(ImageError::UnsupportedFormat)
+    }
+
+    #[cfg(feature = "netpbm")]
+    {
+        let mut buffer = Vec::new();
+        match first {
+            #[cfg(feature = "netpbm")]
+            NativeImage::Netpbm(_) => {
+                let images = images
+                    .iter()
+                    .map(|image| match image {
+                        NativeImage::Netpbm(image) => Ok(image.clone()),
+                        NativeImage::Pam(_) => Err(ImageError::UnsupportedFormat),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                pnm::encode_all_native(&mut buffer, &images)?;
+            }
+            #[cfg(feature = "netpbm")]
+            NativeImage::Pam(_) => {
+                let images = images
+                    .iter()
+                    .map(|image| match image {
+                        NativeImage::Pam(image) => Ok(image.clone()),
+                        NativeImage::Netpbm(_) => Err(ImageError::UnsupportedFormat),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                pam::encode_all_native(&mut buffer, &images)?;
+            }
+            #[allow(unreachable_patterns)]
+            _ => return Err(ImageError::UnsupportedFormat),
+        }
+
+        writer.write_all(&buffer)?;
+        Ok(())
+    }
+}
+
+fn decode_from_slice(data: &[u8]) -> Result<Image> {
+    match detect_format(data)? {
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PbmAscii => pbm::decode_ascii(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PgmAscii => pgm::decode_ascii(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PpmAscii => ppm::decode_ascii(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PbmBinary => pbm::decode(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PgmBinary => pgm::decode(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PpmBinary => ppm::decode(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::Pam => pam::decode(&mut Cursor::new(data)),
+        #[cfg(feature = "bmp")]
+        ImageFormat::Bmp => bmp::decode(&mut Cursor::new(data)),
+    }
+}
+
+fn decode_native_from_slice(data: &[u8]) -> Result<NativeImage> {
+    match detect_format(data)? {
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PbmAscii => Ok(NativeImage::Netpbm(pbm::decode_ascii_native(
+            &mut Cursor::new(data),
+        )?)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PgmAscii => Ok(NativeImage::Netpbm(pgm::decode_ascii_native(
+            &mut Cursor::new(data),
+        )?)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PpmAscii => Ok(NativeImage::Netpbm(ppm::decode_ascii_native(
+            &mut Cursor::new(data),
+        )?)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PbmBinary => Ok(NativeImage::Netpbm(pbm::decode_native(&mut Cursor::new(
+            data,
+        ))?)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PgmBinary => Ok(NativeImage::Netpbm(pgm::decode_native(&mut Cursor::new(
+            data,
+        ))?)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PpmBinary => Ok(NativeImage::Netpbm(ppm::decode_native(&mut Cursor::new(
+            data,
+        ))?)),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::Pam => Ok(NativeImage::Pam(pam::decode_native(&mut Cursor::new(
+            data,
+        ))?)),
+        #[cfg(feature = "bmp")]
+        ImageFormat::Bmp => Err(ImageError::UnsupportedFormat),
+    }
+}
+
+fn decode_all_native_from_slice(data: &[u8]) -> Result<Vec<NativeImage>> {
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    match detect_format(data)? {
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PbmBinary | ImageFormat::PgmBinary | ImageFormat::PpmBinary => {
+            pnm::decode_all_native(&mut Cursor::new(data)).map(|images| {
+                images
+                    .into_iter()
+                    .map(NativeImage::Netpbm)
+                    .collect::<Vec<_>>()
+            })
+        }
+        #[cfg(feature = "netpbm")]
+        ImageFormat::Pam => pam::decode_all_native(&mut Cursor::new(data))
+            .map(|images| images.into_iter().map(NativeImage::Pam).collect::<Vec<_>>()),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PbmAscii | ImageFormat::PgmAscii | ImageFormat::PpmAscii => {
+            Err(ImageError::UnsupportedFormat)
+        }
+        #[cfg(feature = "bmp")]
+        ImageFormat::Bmp => Err(ImageError::UnsupportedFormat),
+    }
+}
+
+fn detect_format(data: &[u8]) -> Result<ImageFormat> {
+    match data {
+        #[cfg(feature = "netpbm")]
+        [b'P', b'1', ..] => Ok(ImageFormat::PbmAscii),
+        #[cfg(feature = "netpbm")]
+        [b'P', b'2', ..] => Ok(ImageFormat::PgmAscii),
+        #[cfg(feature = "netpbm")]
+        [b'P', b'3', ..] => Ok(ImageFormat::PpmAscii),
+        #[cfg(feature = "netpbm")]
+        [b'P', b'4', ..] => Ok(ImageFormat::PbmBinary),
+        #[cfg(feature = "netpbm")]
+        [b'P', b'5', ..] => Ok(ImageFormat::PgmBinary),
+        #[cfg(feature = "netpbm")]
+        [b'P', b'6', ..] => Ok(ImageFormat::PpmBinary),
+        #[cfg(feature = "netpbm")]
+        [b'P', b'7', ..] => Ok(ImageFormat::Pam),
+        #[cfg(feature = "bmp")]
+        [b'B', b'M', ..] => Ok(ImageFormat::Bmp),
+        _ => Err(ImageError::UnsupportedFormat),
+    }
+}
+
+#[cfg(all(test, feature = "bmp", feature = "netpbm"))]
+mod tests {
+    use std::io::Cursor;
+
+    use crate::PixelFormat;
+    use crate::codecs::pnm::PnmEncodeFormat;
+    use crate::codecs::{NetpbmImage, PamTupleType};
+
+    use super::*;
+
+    #[test]
+    fn decode_detects_pbm_ascii() {
+        let image = decode(&mut Cursor::new(b"P1\n1 1\n0\n")).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Gray8);
+        assert_eq!(image.data, [255]);
+    }
+
+    #[test]
+    fn decode_detects_pgm_ascii() {
+        let image = decode(&mut Cursor::new(b"P2\n1 1\n15\n15\n")).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Gray8);
+        assert_eq!(image.data, [255]);
+    }
+
+    #[test]
+    fn decode_detects_ppm_ascii() {
+        let image = decode(&mut Cursor::new(b"P3\n1 1\n15\n15 0 5\n")).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 85]);
+    }
+
+    #[test]
+    fn decode_detects_pbm_binary() {
+        let image = decode(&mut Cursor::new(b"P4\n1 1\n\x80")).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Gray8);
+        assert_eq!(image.data, [0]);
+    }
+
+    #[test]
+    fn decode_detects_pgm_binary() {
+        let image = decode(&mut Cursor::new(b"P5\n1 1\n255\n\x80")).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Gray8);
+        assert_eq!(image.data, [128]);
+    }
+
+    #[test]
+    fn decode_detects_ppm_binary() {
+        let image = decode(&mut Cursor::new(b"P6\n1 1\n255\n\xff\0\x80")).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 128]);
+    }
+
+    #[test]
+    fn decode_detects_pam() {
+        let input = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n\xff\0\x80";
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 128]);
+    }
+
+    #[test]
+    fn decode_detects_bmp() {
+        let input = [
+            0x42, 0x4d, 0x3a, 0, 0, 0, 0, 0, 0, 0, 0x36, 0, 0, 0, 0x28, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 1, 0, 0x18, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0x80, 0, 0xff, 0,
+        ];
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 128]);
+    }
+
+    #[test]
+    fn decode_rejects_empty_input() {
+        let error = decode(&mut Cursor::new([])).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_rejects_short_magic() {
+        let error = decode(&mut Cursor::new(b"P")).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_rejects_unknown_magic() {
+        let error = decode(&mut Cursor::new(b"ZZ")).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_native_detects_pbm_ascii() {
+        let image = decode_native(&mut Cursor::new(b"P1\n1 1\n0\n")).unwrap();
+
+        assert_eq!(
+            image,
+            NativeImage::Netpbm(NetpbmImage::Pbm {
+                width: 1,
+                height: 1,
+                data: vec![0],
+            })
+        );
+    }
+
+    #[test]
+    fn decode_native_detects_pgm_binary() {
+        let image = decode_native(&mut Cursor::new(b"P5\n1 1\n15\n\x0f")).unwrap();
+
+        assert_eq!(
+            image,
+            NativeImage::Netpbm(NetpbmImage::Pgm {
+                width: 1,
+                height: 1,
+                maxval: 15,
+                data: vec![15],
+            })
+        );
+    }
+
+    #[test]
+    fn decode_native_detects_ppm_binary() {
+        let image = decode_native(&mut Cursor::new(b"P6\n1 1\n255\n\xff\0\x80")).unwrap();
+
+        assert_eq!(
+            image,
+            NativeImage::Netpbm(NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![255, 0, 128],
+            })
+        );
+    }
+
+    #[test]
+    fn decode_native_detects_pam() {
+        let input = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n\xff\0\x80";
+        let image = decode_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            image,
+            NativeImage::Pam(PamImage {
+                width: 1,
+                height: 1,
+                depth: 3,
+                maxval: 255,
+                tuple_type: Some(PamTupleType::Rgb),
+                data: vec![255, 0, 128],
+            })
+        );
+    }
+
+    #[test]
+    fn native_image_to_image_converts_wrapped_image() {
+        let image = NativeImage::Netpbm(NetpbmImage::Pgm {
+            width: 1,
+            height: 1,
+            maxval: 15,
+            data: vec![15],
+        })
+        .to_image()
+        .unwrap();
+
+        assert_eq!(image.pixel_format, PixelFormat::Gray8);
+        assert_eq!(image.data, [255]);
+    }
+
+    #[test]
+    fn decode_native_rejects_bmp() {
+        let input = [
+            0x42, 0x4d, 0x3a, 0, 0, 0, 0, 0, 0, 0, 0x36, 0, 0, 0, 0x28, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 1, 0, 0x18, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0x80, 0, 0xff, 0,
+        ];
+        let error = decode_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_all_native_returns_empty_vec_for_empty_input() {
+        let images = decode_all_native(&mut Cursor::new([])).unwrap();
+
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn decode_all_native_detects_pbm_binary_stream() {
+        let input = b"P4\n1 1\n\x80P4\n1 1\n\0";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NativeImage::Netpbm(NetpbmImage::Pbm {
+                    width: 1,
+                    height: 1,
+                    data: vec![1],
+                }),
+                NativeImage::Netpbm(NetpbmImage::Pbm {
+                    width: 1,
+                    height: 1,
+                    data: vec![0],
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_detects_pgm_binary_stream() {
+        let input = b"P5\n1 1\n15\n\x0fP5\n1 1\n15\n\0";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NativeImage::Netpbm(NetpbmImage::Pgm {
+                    width: 1,
+                    height: 1,
+                    maxval: 15,
+                    data: vec![15],
+                }),
+                NativeImage::Netpbm(NetpbmImage::Pgm {
+                    width: 1,
+                    height: 1,
+                    maxval: 15,
+                    data: vec![0],
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_detects_ppm_binary_stream() {
+        let input = b"P6\n1 1\n255\n\xff\0\x80P6\n1 1\n255\n\0\x80\xff";
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NativeImage::Netpbm(NetpbmImage::Ppm {
+                    width: 1,
+                    height: 1,
+                    maxval: 255,
+                    data: vec![255, 0, 128],
+                }),
+                NativeImage::Netpbm(NetpbmImage::Ppm {
+                    width: 1,
+                    height: 1,
+                    maxval: 255,
+                    data: vec![0, 128, 255],
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_detects_pam_stream() {
+        let image = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n\xff\0\x80";
+        let input = [image.as_slice(), image.as_slice()].concat();
+        let images = decode_all_native(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(
+            images,
+            [
+                NativeImage::Pam(PamImage {
+                    width: 1,
+                    height: 1,
+                    depth: 3,
+                    maxval: 255,
+                    tuple_type: Some(PamTupleType::Rgb),
+                    data: vec![255, 0, 128],
+                }),
+                NativeImage::Pam(PamImage {
+                    width: 1,
+                    height: 1,
+                    depth: 3,
+                    maxval: 255,
+                    tuple_type: Some(PamTupleType::Rgb),
+                    data: vec![255, 0, 128],
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_all_native_rejects_plain_pnm() {
+        let error = decode_all_native(&mut Cursor::new(b"P1\n1 1\n0\n")).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_all_native_rejects_bmp() {
+        let input = [
+            0x42, 0x4d, 0x3a, 0, 0, 0, 0, 0, 0, 0, 0x36, 0, 0, 0, 0x28, 0, 0, 0, 1, 0, 0, 0, 1, 0,
+            0, 0, 1, 0, 0x18, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0x80, 0, 0xff, 0,
+        ];
+        let error = decode_all_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_all_native_rejects_mixed_pnm_binary_stream() {
+        let error = decode_all_native(&mut Cursor::new(b"P5\n1 1\n255\n\0P6\n1 1\n255\n\0\0\0"))
+            .unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn encode_writes_pnm_image() {
+        let image = Image::new(1, 1, PixelFormat::Rgb8, vec![255, 0, 128]).unwrap();
+        let mut output = Vec::new();
+
+        encode(
+            &mut output,
+            image.as_view(),
+            EncodeFormat::Pnm(PnmEncodeFormat::PpmBinary),
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode_native(&mut Cursor::new(output)).unwrap(),
+            NativeImage::Netpbm(NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![255, 0, 128],
+            })
+        );
+    }
+
+    #[test]
+    fn encode_writes_pam_image() {
+        let image = Image::new(1, 1, PixelFormat::Rgb8, vec![255, 0, 128]).unwrap();
+        let mut output = Vec::new();
+
+        encode(
+            &mut output,
+            image.as_view(),
+            EncodeFormat::Pam(PamEncodeTupleType::Rgb),
+        )
+        .unwrap();
+
+        assert_eq!(
+            decode_native(&mut Cursor::new(output)).unwrap(),
+            NativeImage::Pam(PamImage {
+                width: 1,
+                height: 1,
+                depth: 3,
+                maxval: 255,
+                tuple_type: Some(PamTupleType::Rgb),
+                data: vec![255, 0, 128],
+            })
+        );
+    }
+
+    #[test]
+    fn encode_writes_bmp_image() {
+        let image = Image::new(1, 1, PixelFormat::Rgb8, vec![255, 0, 128]).unwrap();
+        let mut output = Vec::new();
+
+        encode(&mut output, image.as_view(), EncodeFormat::Bmp).unwrap();
+
+        let decoded = decode(&mut Cursor::new(output)).unwrap();
+        assert_eq!(decoded.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(decoded.data, [255, 0, 128]);
+    }
+
+    #[test]
+    fn encode_rejects_mismatched_format_without_writing() {
+        let image = Image::new(1, 1, PixelFormat::Gray8, vec![128]).unwrap();
+        let mut output = b"unchanged".to_vec();
+
+        let error = encode(&mut output, image.as_view(), EncodeFormat::Bmp).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::UnsupportedPixelFormat {
+                pixel_format: PixelFormat::Gray8
+            }
+        );
+        assert_eq!(output, b"unchanged");
+    }
+
+    #[test]
+    fn encode_native_writes_netpbm_image() {
+        let image = NativeImage::Netpbm(NetpbmImage::Pgm {
+            width: 1,
+            height: 1,
+            maxval: 15,
+            data: vec![15],
+        });
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(decode_native(&mut Cursor::new(output)).unwrap(), image);
+    }
+
+    #[test]
+    fn encode_native_writes_pam_image() {
+        let image = NativeImage::Pam(PamImage {
+            width: 1,
+            height: 1,
+            depth: 3,
+            maxval: 255,
+            tuple_type: Some(PamTupleType::Rgb),
+            data: vec![255, 0, 128],
+        });
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(decode_native(&mut Cursor::new(output)).unwrap(), image);
+    }
+
+    #[test]
+    fn encode_all_native_writes_empty_stream_for_empty_slice() {
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &[]).unwrap();
+
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn encode_all_native_writes_netpbm_stream() {
+        let images = [
+            NativeImage::Netpbm(NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![255, 0, 128],
+            }),
+            NativeImage::Netpbm(NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![0, 128, 255],
+            }),
+        ];
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &images).unwrap();
+
+        assert_eq!(decode_all_native(&mut Cursor::new(output)).unwrap(), images);
+    }
+
+    #[test]
+    fn encode_all_native_writes_pam_stream() {
+        let image = NativeImage::Pam(PamImage {
+            width: 1,
+            height: 1,
+            depth: 3,
+            maxval: 255,
+            tuple_type: Some(PamTupleType::Rgb),
+            data: vec![255, 0, 128],
+        });
+        let images = [image.clone(), image];
+        let mut output = Vec::new();
+
+        encode_all_native(&mut output, &images).unwrap();
+
+        assert_eq!(decode_all_native(&mut Cursor::new(output)).unwrap(), images);
+    }
+
+    #[test]
+    fn encode_all_native_rejects_mixed_native_families_without_writing() {
+        let images = [
+            NativeImage::Netpbm(NetpbmImage::Pgm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![128],
+            }),
+            NativeImage::Pam(PamImage {
+                width: 1,
+                height: 1,
+                depth: 1,
+                maxval: 255,
+                tuple_type: Some(PamTupleType::Grayscale),
+                data: vec![128],
+            }),
+        ];
+        let mut output = b"unchanged".to_vec();
+
+        let error = encode_all_native(&mut output, &images).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+        assert_eq!(output, b"unchanged");
+    }
+
+    #[test]
+    fn encode_all_native_rejects_mixed_netpbm_subformats_without_writing() {
+        let images = [
+            NativeImage::Netpbm(NetpbmImage::Pgm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![128],
+            }),
+            NativeImage::Netpbm(NetpbmImage::Ppm {
+                width: 1,
+                height: 1,
+                maxval: 255,
+                data: vec![128, 0, 255],
+            }),
+        ];
+        let mut output = b"unchanged".to_vec();
+
+        let error = encode_all_native(&mut output, &images).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+        assert_eq!(output, b"unchanged");
+    }
+}

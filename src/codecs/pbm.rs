@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 
 use crate::codecs::netpbm::{
-    Dimensions, HeaderParser, NetpbmImage, gray_image_to_pbm_native, read_bitmap_header,
+    Dimensions, HeaderParser, NetpbmImage, image_view_to_pbm_native, read_bitmap_header,
     reject_trailing_tokens, validate_image_view, write_bitmap_header,
     write_bitmap_header_dimensions,
 };
@@ -72,6 +72,17 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NetpbmImage>> {
     }
 
     Ok(images)
+}
+
+/// Decodes all binary PBM P4 images from a multi-image stream.
+///
+/// PBM bits are expanded to `PixelFormat::Gray8`, where `0` is black and `255`
+/// is white.
+pub fn decode_all<R: Read>(reader: &mut R) -> Result<Vec<Image>> {
+    decode_all_native(reader)?
+        .into_iter()
+        .map(Image::try_from)
+        .collect()
 }
 
 fn decode_one_native(data: &[u8], parser: &mut HeaderParser<'_>) -> Result<NetpbmImage> {
@@ -230,7 +241,7 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NetpbmImage) -> Result<()
 pub fn encode_all<W: Write>(writer: &mut W, images: &[ImageView<'_>]) -> Result<()> {
     let images = images
         .iter()
-        .map(|image| gray_image_to_pbm_native(*image))
+        .map(|image| image_view_to_pbm_native(*image))
         .collect::<Result<Vec<_>>>()?;
 
     encode_all_native(writer, &images)
@@ -522,6 +533,18 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn decode_all_reads_normalized_pbm_p4_images() {
+        let input = b"P4\n1 1\n\0P4\n1 1\n\x80";
+        let images = decode_all(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].pixel_format, PixelFormat::Gray8);
+        assert_eq!(images[0].data, [255]);
+        assert_eq!(images[1].pixel_format, PixelFormat::Gray8);
+        assert_eq!(images[1].data, [0]);
     }
 
     #[test]
