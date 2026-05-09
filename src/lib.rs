@@ -4,6 +4,7 @@ pub mod codecs;
 mod error;
 mod format;
 mod image;
+#[cfg(feature = "bmp")]
 mod io;
 
 pub use error::{ImageError, Result};

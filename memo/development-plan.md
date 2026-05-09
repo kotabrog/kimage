@@ -499,6 +499,15 @@ public API の個別対応候補:
 - 最後に `make ci` を通す
 - 必要に応じて `cargo package --list` で crate に含まれるファイルを確認する
 
+Cargo feature 方針:
+
+- default features は `["bmp", "netpbm"]` にする
+- `bmp` feature は BMP codec と BMP 用 endian helper を有効にする
+- `netpbm` feature は PBM / PGM / PPM / PNM / PAM と Netpbm 共通処理を有効にする
+- feature を細かく PBM / PGM / PPM / PAM に分けるのは、共通 parser や native 型の cfg が増えるため初回リリースでは行わない
+- examples は `required-features` を設定し、無効な形式の example を feature 無効時の build 対象から外す
+- `make ci` では default の lint/test に加え、`--no-default-features`, `--features bmp`, `--features netpbm` の clippy を通す
+
 トップレベルAPI追加の検討項目:
 
 初回リリース前に、形式別 codec API に加えて `kimage::decode` の利用者向け入口を追加する。

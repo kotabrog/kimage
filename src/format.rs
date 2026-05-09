@@ -1,32 +1,50 @@
-use std::io::{Cursor, Read, Write};
+#[cfg(any(feature = "bmp", feature = "netpbm"))]
+use std::io::Cursor;
+use std::io::{Read, Write};
 
-use crate::codecs::{NetpbmImage, PamEncodeTupleType, PamImage, bmp, pam, pbm, pgm, pnm, ppm};
+#[cfg(feature = "bmp")]
+use crate::codecs::bmp;
+#[cfg(feature = "netpbm")]
+use crate::codecs::{NetpbmImage, PamEncodeTupleType, PamImage, pam, pbm, pgm, pnm, ppm};
 use crate::{Image, ImageError, ImageView, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ImageFormat {
+    #[cfg(feature = "netpbm")]
     PbmAscii,
+    #[cfg(feature = "netpbm")]
     PgmAscii,
+    #[cfg(feature = "netpbm")]
     PpmAscii,
+    #[cfg(feature = "netpbm")]
     PbmBinary,
+    #[cfg(feature = "netpbm")]
     PgmBinary,
+    #[cfg(feature = "netpbm")]
     PpmBinary,
+    #[cfg(feature = "netpbm")]
     Pam,
+    #[cfg(feature = "bmp")]
     Bmp,
 }
 
 /// A format-specific image representation that preserves native file values.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NativeImage {
+    #[cfg(feature = "netpbm")]
     Netpbm(NetpbmImage),
+    #[cfg(feature = "netpbm")]
     Pam(PamImage),
 }
 
 /// Output format used when encoding a generic image view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EncodeFormat {
+    #[cfg(feature = "netpbm")]
     Pnm(pnm::PnmEncodeFormat),
+    #[cfg(feature = "netpbm")]
     Pam(PamEncodeTupleType),
+    #[cfg(feature = "bmp")]
     Bmp,
 }
 
@@ -34,8 +52,12 @@ impl NativeImage {
     /// Converts this native image into the generic normalized image buffer.
     pub fn to_image(&self) -> Result<Image> {
         match self {
+            #[cfg(feature = "netpbm")]
             Self::Netpbm(image) => image.to_image(),
+            #[cfg(feature = "netpbm")]
             Self::Pam(image) => image.to_image(),
+            #[allow(unreachable_patterns)]
+            _ => Err(ImageError::UnsupportedFormat),
         }
     }
 }
@@ -70,22 +92,41 @@ pub fn decode_all_native<R: Read>(reader: &mut R) -> Result<Vec<NativeImage>> {
 
 /// Encodes an image view using an explicitly selected output format.
 pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>, format: EncodeFormat) -> Result<()> {
-    let mut buffer = Vec::new();
-    match format {
-        EncodeFormat::Pnm(format) => pnm::encode(&mut buffer, image, format)?,
-        EncodeFormat::Pam(tuple_type) => pam::encode(&mut buffer, image, tuple_type)?,
-        EncodeFormat::Bmp => bmp::encode(&mut buffer, image)?,
+    #[cfg(not(any(feature = "bmp", feature = "netpbm")))]
+    {
+        let _ = (writer, image, format);
+        Err(ImageError::UnsupportedFormat)
     }
 
-    writer.write_all(&buffer)?;
-    Ok(())
+    #[cfg(any(feature = "bmp", feature = "netpbm"))]
+    {
+        let mut buffer = Vec::new();
+        match format {
+            #[cfg(feature = "netpbm")]
+            EncodeFormat::Pnm(format) => pnm::encode(&mut buffer, image, format)?,
+            #[cfg(feature = "netpbm")]
+            EncodeFormat::Pam(tuple_type) => pam::encode(&mut buffer, image, tuple_type)?,
+            #[cfg(feature = "bmp")]
+            EncodeFormat::Bmp => bmp::encode(&mut buffer, image)?,
+        }
+
+        writer.write_all(&buffer)?;
+        Ok(())
+    }
 }
 
 /// Encodes a native image by using the format represented by the image value.
 pub fn encode_native<W: Write>(writer: &mut W, image: &NativeImage) -> Result<()> {
     match image {
+        #[cfg(feature = "netpbm")]
         NativeImage::Netpbm(image) => pnm::encode_native(writer, image),
+        #[cfg(feature = "netpbm")]
         NativeImage::Pam(image) => pam::encode_native(writer, image),
+        #[allow(unreachable_patterns)]
+        _ => {
+            let _ = writer;
+            Err(ImageError::UnsupportedFormat)
+        }
     }
 }
 
@@ -98,70 +139,99 @@ pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NativeImage]) -> Re
         return Ok(());
     };
 
-    let mut buffer = Vec::new();
-    match first {
-        NativeImage::Netpbm(_) => {
-            let images = images
-                .iter()
-                .map(|image| match image {
-                    NativeImage::Netpbm(image) => Ok(image.clone()),
-                    NativeImage::Pam(_) => Err(ImageError::UnsupportedFormat),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            pnm::encode_all_native(&mut buffer, &images)?;
-        }
-        NativeImage::Pam(_) => {
-            let images = images
-                .iter()
-                .map(|image| match image {
-                    NativeImage::Pam(image) => Ok(image.clone()),
-                    NativeImage::Netpbm(_) => Err(ImageError::UnsupportedFormat),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            pam::encode_all_native(&mut buffer, &images)?;
-        }
+    #[cfg(not(feature = "netpbm"))]
+    {
+        let _ = (writer, first);
+        Err(ImageError::UnsupportedFormat)
     }
 
-    writer.write_all(&buffer)?;
-    Ok(())
+    #[cfg(feature = "netpbm")]
+    {
+        let mut buffer = Vec::new();
+        match first {
+            #[cfg(feature = "netpbm")]
+            NativeImage::Netpbm(_) => {
+                let images = images
+                    .iter()
+                    .map(|image| match image {
+                        NativeImage::Netpbm(image) => Ok(image.clone()),
+                        NativeImage::Pam(_) => Err(ImageError::UnsupportedFormat),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                pnm::encode_all_native(&mut buffer, &images)?;
+            }
+            #[cfg(feature = "netpbm")]
+            NativeImage::Pam(_) => {
+                let images = images
+                    .iter()
+                    .map(|image| match image {
+                        NativeImage::Pam(image) => Ok(image.clone()),
+                        NativeImage::Netpbm(_) => Err(ImageError::UnsupportedFormat),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                pam::encode_all_native(&mut buffer, &images)?;
+            }
+            #[allow(unreachable_patterns)]
+            _ => return Err(ImageError::UnsupportedFormat),
+        }
+
+        writer.write_all(&buffer)?;
+        Ok(())
+    }
 }
 
 fn decode_from_slice(data: &[u8]) -> Result<Image> {
     match detect_format(data)? {
+        #[cfg(feature = "netpbm")]
         ImageFormat::PbmAscii => pbm::decode_ascii(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PgmAscii => pgm::decode_ascii(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PpmAscii => ppm::decode_ascii(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PbmBinary => pbm::decode(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PgmBinary => pgm::decode(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PpmBinary => ppm::decode(&mut Cursor::new(data)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::Pam => pam::decode(&mut Cursor::new(data)),
+        #[cfg(feature = "bmp")]
         ImageFormat::Bmp => bmp::decode(&mut Cursor::new(data)),
     }
 }
 
 fn decode_native_from_slice(data: &[u8]) -> Result<NativeImage> {
     match detect_format(data)? {
+        #[cfg(feature = "netpbm")]
         ImageFormat::PbmAscii => Ok(NativeImage::Netpbm(pbm::decode_ascii_native(
             &mut Cursor::new(data),
         )?)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PgmAscii => Ok(NativeImage::Netpbm(pgm::decode_ascii_native(
             &mut Cursor::new(data),
         )?)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PpmAscii => Ok(NativeImage::Netpbm(ppm::decode_ascii_native(
             &mut Cursor::new(data),
         )?)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PbmBinary => Ok(NativeImage::Netpbm(pbm::decode_native(&mut Cursor::new(
             data,
         ))?)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PgmBinary => Ok(NativeImage::Netpbm(pgm::decode_native(&mut Cursor::new(
             data,
         ))?)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::PpmBinary => Ok(NativeImage::Netpbm(ppm::decode_native(&mut Cursor::new(
             data,
         ))?)),
+        #[cfg(feature = "netpbm")]
         ImageFormat::Pam => Ok(NativeImage::Pam(pam::decode_native(&mut Cursor::new(
             data,
         ))?)),
+        #[cfg(feature = "bmp")]
         ImageFormat::Bmp => Err(ImageError::UnsupportedFormat),
     }
 }
@@ -172,6 +242,7 @@ fn decode_all_native_from_slice(data: &[u8]) -> Result<Vec<NativeImage>> {
     }
 
     match detect_format(data)? {
+        #[cfg(feature = "netpbm")]
         ImageFormat::PbmBinary | ImageFormat::PgmBinary | ImageFormat::PpmBinary => {
             pnm::decode_all_native(&mut Cursor::new(data)).map(|images| {
                 images
@@ -180,30 +251,41 @@ fn decode_all_native_from_slice(data: &[u8]) -> Result<Vec<NativeImage>> {
                     .collect::<Vec<_>>()
             })
         }
+        #[cfg(feature = "netpbm")]
         ImageFormat::Pam => pam::decode_all_native(&mut Cursor::new(data))
             .map(|images| images.into_iter().map(NativeImage::Pam).collect::<Vec<_>>()),
-        ImageFormat::PbmAscii
-        | ImageFormat::PgmAscii
-        | ImageFormat::PpmAscii
-        | ImageFormat::Bmp => Err(ImageError::UnsupportedFormat),
+        #[cfg(feature = "netpbm")]
+        ImageFormat::PbmAscii | ImageFormat::PgmAscii | ImageFormat::PpmAscii => {
+            Err(ImageError::UnsupportedFormat)
+        }
+        #[cfg(feature = "bmp")]
+        ImageFormat::Bmp => Err(ImageError::UnsupportedFormat),
     }
 }
 
 fn detect_format(data: &[u8]) -> Result<ImageFormat> {
     match data {
+        #[cfg(feature = "netpbm")]
         [b'P', b'1', ..] => Ok(ImageFormat::PbmAscii),
+        #[cfg(feature = "netpbm")]
         [b'P', b'2', ..] => Ok(ImageFormat::PgmAscii),
+        #[cfg(feature = "netpbm")]
         [b'P', b'3', ..] => Ok(ImageFormat::PpmAscii),
+        #[cfg(feature = "netpbm")]
         [b'P', b'4', ..] => Ok(ImageFormat::PbmBinary),
+        #[cfg(feature = "netpbm")]
         [b'P', b'5', ..] => Ok(ImageFormat::PgmBinary),
+        #[cfg(feature = "netpbm")]
         [b'P', b'6', ..] => Ok(ImageFormat::PpmBinary),
+        #[cfg(feature = "netpbm")]
         [b'P', b'7', ..] => Ok(ImageFormat::Pam),
+        #[cfg(feature = "bmp")]
         [b'B', b'M', ..] => Ok(ImageFormat::Bmp),
         _ => Err(ImageError::UnsupportedFormat),
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bmp", feature = "netpbm"))]
 mod tests {
     use std::io::Cursor;
 

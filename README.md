@@ -43,6 +43,19 @@ kimage::encode_all_native(&mut writer, &images)?;
 
 For format-specific behavior, use the modules under `kimage::codecs`.
 
+## Cargo Features
+
+Default features enable all currently supported format families:
+
+```toml
+default = ["bmp", "netpbm"]
+```
+
+Available features:
+
+- `bmp`: enables BMP codec support
+- `netpbm`: enables PBM, PGM, PPM, PNM, and PAM codec support
+
 ## Current Format Support
 
 The current implementations intentionally cover only small, early subsets of each format.

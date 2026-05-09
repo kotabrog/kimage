@@ -2,7 +2,7 @@ SHELL := bash
 CARGO := cargo
 CARGOFLAGS ?=
 
-.PHONY: all ci fmt fmt-check lint check test
+.PHONY: all ci fmt fmt-check lint check test feature-check
 
 all: ci
 
@@ -26,5 +26,11 @@ check:
 test:
 	$(CARGO) test $(CARGOFLAGS) --all-targets
 
+# Verify supported feature combinations compile cleanly
+feature-check:
+	RUSTFLAGS="-D warnings" $(CARGO) clippy --no-default-features --all-targets -- -D warnings
+	RUSTFLAGS="-D warnings" $(CARGO) clippy --no-default-features --features bmp --all-targets -- -D warnings
+	RUSTFLAGS="-D warnings" $(CARGO) clippy --no-default-features --features netpbm --all-targets -- -D warnings
+
 # CI entry: verify format, lint, and tests
-ci: fmt-check lint test
+ci: fmt-check lint test feature-check

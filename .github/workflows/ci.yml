@@ -25,6 +25,9 @@ jobs:
       - name: Clippy lint
         run: make lint
 
+      - name: Feature checks
+        run: make feature-check
+
   test:
     runs-on: ubuntu-latest
     steps:
