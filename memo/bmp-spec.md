@@ -46,7 +46,7 @@ BMP file の先頭には `BITMAPFILEHEADER` が置かれる。
 | `bfReserved2` | reserved field |
 | `bfOffBits` | pixel array の開始 offset |
 
-このクレートでは、完成予定版でも `bfType` は `BM` のみ扱う。
+このクレートでは、初期版 / 後続版とも `bfType` は `BM` のみ扱う。
 
 `bfReserved1` と `bfReserved2` は仕様上 0 でなければならない。
 encode 時は常に 0 を書く。
@@ -69,13 +69,18 @@ pixel array より前に必要な領域の途中を指す場合は不正な head
 `BITMAPFILEHEADER` の直後には DIB header が置かれる。
 DIB header の先頭 field は header size であり、この値によって header の種類を判別する。
 
-完成予定版では、次の DIB header を対象にする。
+初期版では `BITMAPINFOHEADER` のみを decode / encode 対象にする。
+`BITMAPV4HEADER` / `BITMAPV5HEADER` は、`BITMAPINFOHEADER` の拡張 header として後続版で追加する。
+DIB header は先頭の header size field で種類を判別できるため、
+後から V4 / V5 を追加しても基本設計は変えない。
+
+扱う DIB header は次の通りである。
 
 | header | size | 扱い |
 | --- | ---: | --- |
-| `BITMAPINFOHEADER` | 40 | 対象 |
-| `BITMAPV4HEADER` | 108 | 対象 |
-| `BITMAPV5HEADER` | 124 | 対象 |
+| `BITMAPINFOHEADER` | 40 | 初期版の対象 |
+| `BITMAPV4HEADER` | 108 | 後続版で追加予定 |
+| `BITMAPV5HEADER` | 124 | 後続版で追加予定 |
 
 次の DIB header は対象外にする。
 
@@ -84,17 +89,18 @@ DIB header の先頭 field は header size であり、この値によって hea
 | `BITMAPCOREHEADER` | 対象外 |
 | OS/2 BMP 固有 header | 対象外 |
 
-対象 header は、Windows BMP の実用上の中心である `BITMAPINFOHEADER` と、
-その拡張である `BITMAPV4HEADER` / `BITMAPV5HEADER` に絞る。
+対象 header は、Windows BMP の実用上の中心である `BITMAPINFOHEADER` から始め、
+その拡張である `BITMAPV4HEADER` / `BITMAPV5HEADER` を後から追加する。
 `BITMAPCOREHEADER` と OS/2 固有 header は、field layout や color table の構造が
 `BITMAPINFOHEADER` 以降と異なり、古い互換形式としての性格が強いため対象外にする。
 
-## DIB header の基本 fields
+## BITMAPINFOHEADER fields
 
-`BITMAPINFOHEADER` 以降の header では、主に次の情報を持つ。
+`BITMAPINFOHEADER` は、file 上では次の field 順で並ぶ。
 
 | field | 内容 |
 | --- | --- |
+| `biSize` | DIB header size |
 | `biWidth` | 画像の幅 |
 | `biHeight` | 画像の高さと行方向 |
 | `biPlanes` | plane 数 |
@@ -106,6 +112,11 @@ DIB header の先頭 field は header size であり、この値によって hea
 | `biClrUsed` | color table の entry 数 |
 | `biClrImportant` | important color count |
 
+`biSize` は DIB header の byte size を表す。
+初期版では `biSize == 40` の `BITMAPINFOHEADER` のみを扱う。
+`biSize == 108` の `BITMAPV4HEADER` と `biSize == 124` の `BITMAPV5HEADER` は後続版で追加する。
+その他の DIB header size は unsupported format として扱う。
+
 `biWidth` は正の値を対象にする。
 `biWidth <= 0` は不正な header として扱う。
 
@@ -115,48 +126,29 @@ DIB header の先頭 field は header size であり、この値によって hea
 - `biHeight < 0`: top-down BMP
 - `biHeight == 0`: 不正な header
 
-`biPlanes` は 1 を期待する。
-
-## 画像方向
-
-BMP には bottom-up と top-down がある。
-
 bottom-up BMP では、file 上の最初の row が画像の一番下の row である。
 top-down BMP では、file 上の最初の row が画像の一番上の row である。
 
-完成予定版では、bottom-up BMP と top-down BMP の両方を扱う。
-
+初期版で top-down BMP を decode 対象に含めるかは未定。
 RLE compression と top-down の組み合わせは仕様上不可とする。
 
-## scan line
+`biPlanes` は 1 を期待する。
+`biPlanes != 1` は不正な header として扱う。
 
-非圧縮 BMP の raster row は 4 byte boundary に揃える。
-各行末には padding byte が入ることがある。
+`biBitCount` は 1 pixel あたりの bit 数を表す。
+初期版では 24-bit `BI_RGB` を対象にする。
+扱う bit depth は次の通りである。
 
-padding byte は pixel value として扱わない。
-
-- decode 時は padding byte を読み飛ばす。
-- encode 時の padding byte の扱いは未定。
-
-## bit depth
-
-完成予定版では、次の bit depth を対象にする。
-
-| `biBitCount` | 内容 |
-| ---: | --- |
-| 1 | indexed color |
-| 4 | indexed color |
-| 8 | indexed color |
-| 16 | true color |
-| 24 | true color |
-| 32 | true color |
+| `biBitCount` | 内容 | 扱い |
+| ---: | --- | --- |
+| 1 | indexed color | 後続版で追加予定 |
+| 4 | indexed color | 後続版で追加予定 |
+| 8 | indexed color | 後続版で追加予定 |
+| 16 | true color | 後続版で追加予定 |
+| 24 | true color | 初期版の対象 |
+| 32 | true color | 後続版で追加予定 |
 
 `biBitCount == 0` は対象外にする。
-
-## pixel array
-
-pixel array は、画像の raster data である。
-開始位置は `bfOffBits` に従う。
 
 24-bit `BI_RGB` の場合、1 pixel は file 上で次の順に並ぶ。
 
@@ -164,24 +156,75 @@ pixel array は、画像の raster data である。
 B G R
 ```
 
-32-bit `BI_RGB` の場合、1 pixel は file 上で次の順に並ぶ。
-
-```text
-B G R unused
-```
-
 indexed color BMP では、pixel array には RGB 値ではなく color table の index が入る。
-
 16-bit / 32-bit bitfields BMP では、pixel value の各 bit を color mask に従って channel value として解釈する。
 
-## color table
+`biCompression` は compression method を表す。
+初期版では `BI_RGB` のみを対象にする。
+扱う compression は次の通りである。
 
+| compression | 内容 | 扱い |
+| --- | --- | --- |
+| `BI_RGB` | uncompressed RGB / indexed color | 初期版の対象 |
+| `BI_BITFIELDS` | RGB bit masks | 後続版で追加予定 |
+| `BI_ALPHABITFIELDS` | RGBA bit masks / Windows CE 由来の拡張 | 後続版で追加予定 |
+| `BI_RLE8` | 8-bit indexed color RLE | 後続版で追加予定 |
+| `BI_RLE4` | 4-bit indexed color RLE | 後続版で追加予定 |
+
+次の compression は対象外にする。
+
+| compression | 扱い |
+| --- | --- |
+| `BI_JPEG` | 対象外 |
+| `BI_PNG` | 対象外 |
+| その他の未対応 value | 対象外 |
+
+`BI_RGB` の pixel array は非圧縮 raster data である。
+開始位置は `bfOffBits` に従う。
+
+非圧縮 BMP の raster row は 4 byte boundary に揃える。
+各行末には padding byte が入ることがある。
+padding byte は pixel value として扱わない。
+
+- decode 時は padding byte を読み飛ばす。
+- encode 時の padding byte の扱いは未定。
+
+`BI_BITFIELDS` では RGB color mask を扱う。
+`BI_ALPHABITFIELDS` では RGBA color mask を扱う。
+ただし、`BI_ALPHABITFIELDS` は Windows desktop GDI の標準的な `BITMAPINFOHEADER`
+compression value ではなく、Windows CE 由来の拡張として扱う。
+
+`BITMAPINFOHEADER` で `BI_BITFIELDS` または `BI_ALPHABITFIELDS` の場合、
+color mask は DIB header の直後に置かれる。
+mask が重複している場合は不正な header として扱う。
+各 mask の set bit が連続していない場合は不正な header として扱う。
+必要な color mask が欠けている場合は不正な header として扱う。
+mask から取り出した channel value の正規化方法は未定。
+
+RLE では、encoded mode と absolute mode がある。
+また、次の escape を扱う必要がある。
+
+- end-of-line
+- end-of-bitmap
+- delta
+
+RLE を decode 対象に含めるかは後続版で決める。
+RLE を encode 対象に含めるかは未定。
+
+`biSizeImage` は pixel array size を表す。
+`BI_RGB` では 0 の場合がある。
+decode 時は、pixel array の必要量を header 情報から計算する。
+`biSizeImage` が 0 または実際の必要量と一致しない場合でも、それだけでは不正とはしない。
+ただし、pixel array が必要量に満たない入力は不正な入力として扱う。
+
+`biXPelsPerMeter` と `biYPelsPerMeter` は resolution metadata を表す。
+generic `Image` への decode では、resolution metadata を保持しない。
+encode 時に resolution を指定できるようにするかは未定。
+指定しない場合の既定値は未定。
+
+`biClrUsed` は color table の entry 数を表す。
 1-bit / 4-bit / 8-bit BMP は color table を使う。
 color table は pixel array の前に置かれる。
-
-16-bit / 24-bit / 32-bit BMP でも、palette device 用の optional color table を持つことがある。
-この場合、`biClrUsed` が color table の entry 数を表す。
-完成予定版で optional color table を保持するかは未定。
 
 color table entry は `RGBQUAD` として扱う。
 file 上の byte order は次の通りである。
@@ -197,98 +240,18 @@ pixel index が color table の範囲外を参照する場合は不正な raster
 
 color table entry の `reserved` byte を alpha として扱うかは未定。
 
-## compression
+`biClrImportant` は important color count を表す。
+generic `Image` への decode では、この値を画像データの解釈には使わない。
 
-完成予定版では、次の compression を対象にする。
+## BITMAPV4HEADER / BITMAPV5HEADER
 
-| compression | 内容 |
-| --- | --- |
-| `BI_RGB` | uncompressed RGB / indexed color |
-| `BI_BITFIELDS` | RGB bit masks |
-| `BI_ALPHABITFIELDS` | RGBA bit masks / Windows CE 由来の拡張 |
-| `BI_RLE8` | 8-bit indexed color RLE |
-| `BI_RLE4` | 4-bit indexed color RLE |
+`BITMAPV4HEADER` / `BITMAPV5HEADER` は後続版で追加する。
 
-次の compression は対象外にする。
-
-| compression | 扱い |
-| --- | --- |
-| `BI_JPEG` | 対象外 |
-| `BI_PNG` | 対象外 |
-| その他の未対応 value | 対象外 |
-
-## color masks
-
-16-bit / 32-bit BMP では、color mask によって pixel value 内の bit 配置を表すことがある。
-
-`BI_BITFIELDS` では RGB color mask を扱う。
-`BI_ALPHABITFIELDS` では RGBA color mask を扱う。
-ただし、`BI_ALPHABITFIELDS` は Windows desktop GDI の標準的な `BITMAPINFOHEADER`
-compression value ではなく、Windows CE 由来の拡張として扱う。
-
-color mask は、DIB header の種類によって置き場所が変わる。
-
-- `BITMAPINFOHEADER` + `BI_BITFIELDS` / `BI_ALPHABITFIELDS`: DIB header の直後
-- `BITMAPV4HEADER`: DIB header 内
-- `BITMAPV5HEADER`: DIB header 内
-
-mask が重複している場合は不正な header として扱う。
-各 mask の set bit が連続していない場合は不正な header として扱う。
-必要な color mask が欠けている場合は不正な header として扱う。
-
-mask から取り出した channel value の正規化方法は未定。
-
-## alpha
-
-BMP の alpha の扱いは、header と compression によって意味が変わる。
-
-明示的な alpha mask がある BMP は alpha 付き画像として扱う予定である。
-
-alpha mask がない 32-bit `BI_RGB` は、上位 byte を未使用 byte として扱う予定である。
-この場合、decode output を `Rgb8` にするか `Rgba8` にするかは未定。
-
-indexed color の color table entry に含まれる `reserved` byte を alpha として扱うかは未定。
-
-## RLE
-
-BMP には indexed color 用の RLE compression がある。
-
-- `BI_RLE8`: 8-bit indexed color BMP の圧縮形式
-- `BI_RLE4`: 4-bit indexed color BMP の圧縮形式
-
-RLE では、encoded mode と absolute mode がある。
-また、次の escape を扱う必要がある。
-
-- end-of-line
-- end-of-bitmap
-- delta
-
-完成予定版で RLE を decode 対象に含める。
-RLE を encode 対象に含めるかは未定。
-
-## color management
-
-`BITMAPV4HEADER` / `BITMAPV5HEADER` は、色空間や gamma に関する fields を持つ。
-linked / embedded ICC profile data は `BITMAPV5HEADER` の profile fields で参照される。
-
+V4 / V5 header は、`BITMAPINFOHEADER` の fields の後ろに、
+color masks、color space、gamma、ICC profile などの fields を追加する。
 generic `Image` への decode では、色空間変換や gamma 補正を行わない予定である。
-
 ICC profile data を保持する native BMP API を用意するかは未定。
 色空間情報をどこまで公開 API として扱うかも未定。
-
-## metadata
-
-BMP header には resolution fields がある。
-
-- `biXPelsPerMeter`
-- `biYPelsPerMeter`
-
-generic `Image` への decode では、resolution metadata を保持しない予定である。
-
-encode 時に resolution を指定できるようにするかは未定。
-指定しない場合の既定値は未定。
-
-application-specific data を保持するかは未定。
 
 ## decode output
 
@@ -354,7 +317,5 @@ native representation を用意する場合は、少なくとも次の情報を�
 - mask が重複している
 - mask の set bit が連続していない
 - 必要な mask が欠けている
-
-`bfSize` と実データ長の不一致をどこまで許容するかは未定。
 
 対応外の DIB header、bit depth、compression は unsupported format として扱う。
