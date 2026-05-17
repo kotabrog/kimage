@@ -48,11 +48,21 @@ BMP file の先頭には `BITMAPFILEHEADER` が置かれる。
 
 このクレートでは、完成予定版でも `bfType` は `BM` のみ扱う。
 
-`bfReserved1` と `bfReserved2` は 0 を期待する。
-0 以外の場合の扱いは未定。
+`bfReserved1` と `bfReserved2` は仕様上 0 でなければならない。
+encode 時は常に 0 を書く。
+decode 時に 0 以外だった場合でも、画像データの解釈には使わず無視する。
 
-`bfSize` と実データ長が一致しない場合の厳密な扱いは未定。
-ただし、pixel array が必要量に満たない入力は不正な入力として扱う。
+`bfSize` は仕様上 BMP file 全体の byte size を表す。
+encode 時は、実際に出力する file size を書く。
+decode 時は、pixel array の解釈には `bfSize` ではなく `bfOffBits` と DIB header の情報を使う。
+`bfSize` が実データ長と一致しない場合でも、それだけでは不正とはしない。
+ただし、`bfOffBits` と DIB header から必要になる pixel data が入力内に収まらない場合は不正な入力として扱う。
+
+`bfOffBits` は、file 先頭から pixel array までの byte offset を表す。
+decode 時は `bfOffBits` を pixel array の開始位置として使う。
+`bfOffBits` が `BITMAPFILEHEADER`、DIB header、color masks、color table など、
+pixel array より前に必要な領域の途中を指す場合は不正な header として扱う。
+`bfOffBits` が入力長を超える場合も不正な header として扱う。
 
 ## DIB header
 
@@ -73,6 +83,11 @@ DIB header の先頭 field は header size であり、この値によって hea
 | --- | --- |
 | `BITMAPCOREHEADER` | 対象外 |
 | OS/2 BMP 固有 header | 対象外 |
+
+対象 header は、Windows BMP の実用上の中心である `BITMAPINFOHEADER` と、
+その拡張である `BITMAPV4HEADER` / `BITMAPV5HEADER` に絞る。
+`BITMAPCOREHEADER` と OS/2 固有 header は、field layout や color table の構造が
+`BITMAPINFOHEADER` 以降と異なり、古い互換形式としての性格が強いため対象外にする。
 
 ## DIB header の基本 fields
 
