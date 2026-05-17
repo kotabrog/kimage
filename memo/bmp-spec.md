@@ -129,8 +129,8 @@ DIB header は先頭の header size field で種類を判別できるため、
 bottom-up BMP では、file 上の最初の row が画像の一番下の row である。
 top-down BMP では、file 上の最初の row が画像の一番上の row である。
 
-初期版で top-down BMP を decode 対象に含めるかは未定。
-RLE compression と top-down の組み合わせは仕様上不可とする。
+`biHeight < 0` の top-down BMP では、`biCompression` は `BI_RGB` または `BI_BITFIELDS` でなければならない。
+そのため、`BI_RLE8` / `BI_RLE4` と top-down BMP の組み合わせは不正な header として扱う。
 
 `biPlanes` は 1 を期待する。
 `biPlanes != 1` は不正な header として扱う。
