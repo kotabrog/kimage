@@ -132,7 +132,9 @@ top-down BMP では、file 上の最初の row が画像の一番上の row で�
 `biHeight < 0` の top-down BMP では、`biCompression` は `BI_RGB` または `BI_BITFIELDS` でなければならない。
 そのため、`BI_RLE8` / `BI_RLE4` と top-down BMP の組み合わせは不正な header として扱う。
 
-`biPlanes` は 1 を期待する。
+`biPlanes` は target device の color plane 数を表す。
+この field は device-dependent bitmap の planar color format に由来する歴史的な field である。
+BMP の DIB header では仕様上 1 でなければならない。
 `biPlanes != 1` は不正な header として扱う。
 
 `biBitCount` は 1 pixel あたりの bit 数を表す。
@@ -141,6 +143,7 @@ top-down BMP では、file 上の最初の row が画像の一番上の row で�
 
 | `biBitCount` | 内容 | 扱い |
 | ---: | --- | --- |
+| 0 | encoded image format 側で bit depth が決まる | 対象外 |
 | 1 | indexed color | 後続版で追加予定 |
 | 4 | indexed color | 後続版で追加予定 |
 | 8 | indexed color | 後続版で追加予定 |
@@ -148,7 +151,9 @@ top-down BMP では、file 上の最初の row が画像の一番上の row で�
 | 24 | true color | 初期版の対象 |
 | 32 | true color | 後続版で追加予定 |
 
-`biBitCount == 0` は対象外にする。
+上記以外の `biBitCount` は unsupported format として扱う。
+`biBitCount == 0` は `BI_JPEG` / `BI_PNG` 向けの値だが、
+このクレートでは `BI_JPEG` / `BI_PNG` を対象外にする。
 
 24-bit `BI_RGB` の場合、1 pixel は file 上で次の順に並ぶ。
 
@@ -156,8 +161,14 @@ top-down BMP では、file 上の最初の row が画像の一番上の row で�
 B G R
 ```
 
-indexed color BMP では、pixel array には RGB 値ではなく color table の index が入る。
-16-bit / 32-bit bitfields BMP では、pixel value の各 bit を color mask に従って channel value として解釈する。
+1-bit / 4-bit / 8-bit BMP は indexed color として扱う。
+pixel array には RGB 値ではなく color table の index が入る。
+color table の entry 数は `biClrUsed` で決まる。
+
+16-bit / 32-bit BMP は true color として扱う。
+`BI_BITFIELDS` / `BI_ALPHABITFIELDS` の場合は、
+pixel value の各 bit を color mask に従って channel value として解釈する。
+color mask の有無と置き場所は `biCompression` で決まる。
 
 `biCompression` は compression method を表す。
 初期版では `BI_RGB` のみを対象にする。
@@ -177,10 +188,15 @@ indexed color BMP では、pixel array には RGB 値ではなく color table �
 | --- | --- |
 | `BI_JPEG` | 対象外 |
 | `BI_PNG` | 対象外 |
+| `BI_CMYK` / `BI_CMYKRLE8` / `BI_CMYKRLE4` | 対象外 |
+| video / FOURCC 系 value | 対象外 |
 | その他の未対応 value | 対象外 |
 
+`biCompression` には、GDI の BMP file で使われる値のほか、
+Windows CE 由来の拡張、CMYK 系、video frame 用の FOURCC value などが存在する。
+このクレートでは、BMP image file として扱う範囲に絞る。
+
 `BI_RGB` の pixel array は非圧縮 raster data である。
-開始位置は `bfOffBits` に従う。
 
 非圧縮 BMP の raster row は 4 byte boundary に揃える。
 各行末には padding byte が入ることがある。
