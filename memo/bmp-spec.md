@@ -299,27 +299,25 @@ BMP encode の完成予定仕様は未定部分がある。
 `Rgb8` encode の既定形式は 24-bit `BI_RGB` とする予定である。
 その他の encode format selection API は未定。
 
-## multi-image
-
-BMP は単一画像形式として扱う。
-
-BMP の `decode_all` / `decode_all_native` は対象外にする予定である。
-1ファイル内に複数の BMP file を連結した入力は標準形式として扱わない。
-
 ## native representation
 
-BMP native representation を用意するかは未定。
+BMP native representation は、generic `Image` への変換で失われる BMP 固有情報を保持するために用意する。
 
-native representation を用意する場合は、少なくとも次の情報を保持する候補がある。
+native representation で保持する対象は以下である。
 
-- DIB header 種類
-- bit depth
-- compression
-- color table
+- `BITMAPFILEHEADER` fields
+- DIB header fields
 - color masks
-- resolution
-- color profile metadata
-- raster data
+- color table
+- pixel array
+
+V4 / V5 対応を追加する場合は、次も保持対象に加える。
+
+- V4 / V5 color space fields
+- V5 color profile fields / profile data
+
+unknown gap bytes や未解釈の application-specific data は保持しない。
+byte-for-byte roundtrip は目標にしない。
 
 ## 不正データの扱い
 
