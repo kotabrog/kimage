@@ -199,11 +199,9 @@ Windows CE 由来の拡張、CMYK 系、video frame 用の FOURCC value など�
 `BI_RGB` の pixel array は非圧縮 raster data である。
 
 非圧縮 BMP の raster row は 4 byte boundary に揃える。
-各行末には padding byte が入ることがある。
-padding byte は pixel value として扱わない。
-
-- decode 時は padding byte を読み飛ばす。
-- encode 時の padding byte の扱いは未定。
+row の pixel byte 数が 4 の倍数でない場合、row 末尾に padding byte が入る。
+decode 時は padding byte を読み飛ばす。
+このクレートの encode では padding byte を 0 で書く。
 
 `BI_BITFIELDS` では RGB color mask を扱う。
 `BI_ALPHABITFIELDS` では RGBA color mask を扱う。
@@ -234,12 +232,25 @@ decode 時は、pixel array の必要量を header 情報から計算する。
 ただし、pixel array が必要量に満たない入力は不正な入力として扱う。
 
 `biXPelsPerMeter` と `biYPelsPerMeter` は resolution metadata を表す。
+ここでの resolution は、画像の pixel 数ではなく、1 meter あたりの pixel 数で表す pixel density である。
 generic `Image` への decode では、resolution metadata を保持しない。
-encode 時に resolution を指定できるようにするかは未定。
-指定しない場合の既定値は未定。
 
 `biClrUsed` は color table の entry 数を表す。
 1-bit / 4-bit / 8-bit BMP は color table を使う。
+color table の entry 数は、`biClrUsed` が 0 でない場合は `biClrUsed` に従う。
+`biClrUsed == 0` の場合は bit depth から決まる標準の最大 entry 数に従う。
+`biClrUsed` が bit depth から決まる最大 entry 数より大きい場合は不正な header として扱う。
+
+pixel index が color table の範囲外を参照する場合は不正な raster として扱う。
+
+`biClrImportant` は、表示に重要な color table entry 数を表す。
+`biClrImportant == 0` は、すべての color table entry が重要であることを表す。
+この field は palette device 向けの hint であり、
+generic `Image` への decode では画像データの解釈には使わない。
+
+## color table
+
+color table は indexed color BMP の palette である。
 color table は pixel array の前に置かれる。
 
 color table entry は `RGBQUAD` として扱う。
@@ -249,15 +260,7 @@ file 上の byte order は次の通りである。
 B G R reserved
 ```
 
-color table の entry 数は、`biClrUsed` が 0 でない場合は `biClrUsed` に従う。
-`biClrUsed == 0` の場合は bit depth から決まる標準の最大 entry 数に従う。
-
-pixel index が color table の範囲外を参照する場合は不正な raster として扱う。
-
 color table entry の `reserved` byte を alpha として扱うかは未定。
-
-`biClrImportant` は important color count を表す。
-generic `Image` への decode では、この値を画像データの解釈には使わない。
 
 ## BITMAPV4HEADER / BITMAPV5HEADER
 
