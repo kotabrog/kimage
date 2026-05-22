@@ -394,6 +394,9 @@ native representation で保持する対象は以下である。
 - color table
 - pixel array
 
+BMP native representation は top-level native API にも追加し、
+`decode_native` / `encode_native` では `NativeImage::Bmp(BmpImage)` として扱う。
+
 V4 / V5 対応を追加する場合は、次も保持対象に加える。
 
 - V4 / V5 color space fields
