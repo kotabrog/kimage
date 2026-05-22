@@ -113,7 +113,7 @@ DIB header は先頭の header size field で種類を判別できるため、
 | `biClrImportant` | important color count |
 
 `biSize` は DIB header の byte size を表す。
-初期版では `biSize == 40` の `BITMAPINFOHEADER` のみを扱う。
+初期版では `biSize == 40` の `BITMAPINFOHEADER` のみを generic decode / encode 対象にする。
 `biSize == 108` の `BITMAPV4HEADER` と `biSize == 124` の `BITMAPV5HEADER` は後続版で追加する。
 その他の DIB header size は unsupported format として扱う。
 
@@ -171,7 +171,7 @@ pixel value の各 bit を color mask に従って channel value として解釈
 color mask の有無と置き場所は `biCompression` で決まる。
 
 `biCompression` は compression method を表す。
-初期版では `BI_RGB` のみを対象にする。
+初期版の generic decode / encode では `BI_RGB` のみを対象にする。
 扱う compression は次の通りである。
 
 | compression | 内容 | 扱い |
@@ -285,19 +285,94 @@ generic `Image` への decode output は未定部分がある。
 - alpha 付き BMP: 未定
 - color profile を持つ BMP: 色変換は行わない
 
+初期版の generic decode 対象は次の範囲に固定する。
+
+- `bfType == "BM"`
+- DIB header は `BITMAPINFOHEADER`
+- `biWidth > 0`
+- `biHeight != 0`
+- `biPlanes == 1`
+- `biBitCount == 24`
+- `biCompression == BI_RGB`
+- output は `PixelFormat::Rgb8`
+
+24-bit `BI_RGB` では、file 上の pixel は `B G R` の順に並ぶ。
+decode ではこれを `Rgb8` の `R G B` に変換する。
+
+初期版の generic decode では、metadata は保持しない。
+`bfReserved1` / `bfReserved2`、`bfSize`、`biSizeImage`、`biXPelsPerMeter`、`biYPelsPerMeter`、`biClrImportant` は、
+generic `Image` の pixel data には反映しない。
+
 ## encode input
 
 BMP encode の完成予定仕様は未定部分がある。
 
-現時点の予定は次の通りである。
+BMP encode は、`ImageView` と `BmpEncodeOptions` から BMP native representation を構築し、
+その native representation を file bytes に書き出す構成にする。
+
+```text
+ImageView + BmpEncodeOptions
+    -> BmpImage
+    -> BMP file bytes
+```
+
+`BmpEncodeOptions` は、出力する BMP 表現を選ぶための設定である。
+file size や pixel array offset など、選択した BMP 表現から一意に決まる header field は直接指定させない。
+`BmpEncodeOptions` の各 field は、原則として `Option<T>` ではなく具体値を持つ。
+未指定の場合の値は `Default` で表現する。
+これは、native representation 構築時に未指定状態を残さず、
+常に確定した encode 方針として扱うためである。
+
+`encode` は `BmpEncodeOptions::default()` を使う shortcut API とする。
+詳細な出力指定が必要な場合は `encode_with_options` を使う。
+
+初期版の generic encode は、`PixelFormat::Rgb8` の `ImageView` を、
+24-bit `BI_RGB` の `BITMAPINFOHEADER` BMP として出力する。
+row order は `BmpEncodeOptions` の orientation に従い、既定値は bottom-up とする。
+
+初期版の `BmpEncodeOptions` は、次の設定を持つ。
+
+| option | 内容 | 初期値 |
+| --- | --- | --- |
+| pixel encoding | pixel array の表現 | 24-bit `BI_RGB` |
+| orientation | row order | bottom-up |
+| `biXPelsPerMeter` | horizontal resolution metadata | 0 |
+| `biYPelsPerMeter` | vertical resolution metadata | 0 |
+
+初期版の pixel encoding は `Rgb24` のみを持つ。
+`Rgb24` は `PixelFormat::Rgb8` の `ImageView` だけを受け付け、
+24-bit `BI_RGB` の `BITMAPINFOHEADER` BMP を生成する。
+
+利用側の記述を簡単にするため、必要に応じて `BmpEncodeOptions::new()` と
+`with_orientation` / `with_resolution` のような builder-style method を追加する。
+ただし、基本形は `Default` と struct update syntax で表現できるようにする。
+
+後続版で option として追加する候補は次の通りである。
 
 - `Rgb8`: encode 対象
-- `Rgba8`: encode 対象に含めるか未定
-- `Gray8`: encode 対象に含めるか未定
-- `Gray16` / `Rgb16` / `Rgba16` / gray alpha formats: 未定
+- `Rgba8`
+- `Gray8`
+- `Gray16` / `Rgb16` / `Rgba16` / gray alpha formats
+- indexed color encode
+- custom color table
+- 16-bit / 32-bit `BI_BITFIELDS`
+- `BITMAPV4HEADER` / `BITMAPV5HEADER`
+- color space metadata
+- ICC profile data
 
-`Rgb8` encode の既定形式は 24-bit `BI_RGB` とする予定である。
-その他の encode format selection API は未定。
+`BmpEncodeOptions` で指定できるものは、利用側が自然に選びたい出力形式や metadata に限定する。
+次のような派生 field は、native representation 構築時に計算する。
+
+- `bfSize`
+- `bfOffBits`
+- `biSize`
+- `biBitCount`
+- `biCompression`
+- `biSizeImage`
+- `biClrUsed`
+
+`biPlanes` は仕様上常に 1 を書く。
+`bfReserved1` と `bfReserved2` は常に 0 を書く。
 
 ## native representation
 
@@ -326,6 +401,7 @@ byte-for-byte roundtrip は目標にしない。
 - header が途中で終わる
 - pixel data が header から計算される必要量に満たない
 - `bfOffBits` が header / color table / mask fields の途中を指す
+- `bfOffBits` が入力長を超える
 - `biWidth <= 0`
 - `biHeight == 0`
 - RLE compression と top-down の組み合わせ
@@ -336,3 +412,4 @@ byte-for-byte roundtrip は目標にしない。
 - 必要な mask が欠けている
 
 対応外の DIB header、bit depth、compression は unsupported format として扱う。
+`bfSize` と実データ長の不一致は、それだけでは不正な入力として扱わない。
