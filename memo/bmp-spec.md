@@ -323,8 +323,16 @@ file size や pixel array offset など、選択した BMP 表現から一意に
 これは、native representation 構築時に未指定状態を残さず、
 常に確定した encode 方針として扱うためである。
 
-`encode` は `BmpEncodeOptions::default()` を使う shortcut API とする。
-詳細な出力指定が必要な場合は `encode_with_options` を使う。
+BMP の codec-level encode は、PNM / PAM と同様に `encode` の引数で encode 指定を受け取る。
+そのため、BMP では `bmp::encode(writer, image, BmpEncodeOptions)` とする。
+Top-level `EncodeFormat` は、generic `ImageView` から各 format の native representation
+を構築するための encode 指定を保持する。
+PNM は subformat の選択だけで十分なため `PnmEncodeFormat` を使う。
+PAM は tuple type の選択だけで十分なため `PamEncodeTupleType` を使う。
+BMP は pixel encoding、orientation、resolution metadata など複数の設定を持つため
+`BmpEncodeOptions` を使う。
+BMP は `EncodeFormat::Bmp(BmpEncodeOptions)` とし、
+top-level `encode` は `BmpEncodeOptions` を `bmp::encode` に渡す。
 
 初期版の generic encode は、`PixelFormat::Rgb8` の `ImageView` を、
 24-bit `BI_RGB` の `BITMAPINFOHEADER` BMP として出力する。
