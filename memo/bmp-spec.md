@@ -56,7 +56,9 @@ generic encode、または `ImageView + BmpEncodeOptions` から `BmpImage` を�
 decode 時に 0 以外だった場合でも、画像データの解釈には使わず無視する。
 
 `bfSize` は仕様上 BMP file 全体の byte size を表す。
-encode 時は、実際に出力する file size を書く。
+generic encode、または `ImageView + BmpEncodeOptions` から `BmpImage` を構築する場合は、
+実際に出力する file size を設定する。
+`encode_native` では、native representation に保持された値を原則そのまま書く。
 decode 時は、pixel array の解釈には `bfSize` ではなく `bfOffBits` と DIB header の情報を使う。
 `bfSize` が実データ長と一致しない場合でも、それだけでは不正とはしない。
 ただし、`bfOffBits` と DIB header から必要になる pixel data が入力内に収まらない場合は不正な入力として扱う。
@@ -242,8 +244,9 @@ decode 時は、pixel array の必要量を header 情報から計算する。
 ただし、pixel array が必要量に満たない入力は不正な入力として扱う。
 generic encode、または `ImageView + BmpEncodeOptions` から `BmpImage` を構築する場合は、
 計算した pixel array size を `biSizeImage` に設定する。
-`encode_native` では、`BI_RGB` の `biSizeImage` が 0 または計算した pixel array size と一致する場合に許容する。
-それ以外の `biSizeImage` は不正な header として扱う。
+`encode_native` では、native representation に保持された値を原則そのまま書く。
+出力される BMP の file layout として `biSizeImage` が整合しているか確認したい場合は、
+`BmpImage::validate_file_layout` を使う。
 
 `biXPelsPerMeter` と `biYPelsPerMeter` は resolution metadata を表す。
 ここでの resolution は、画像の pixel 数ではなく、1 meter あたりの pixel 数で表す pixel density である。

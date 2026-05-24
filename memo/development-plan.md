@@ -5,7 +5,7 @@
 
 ## 現在の作業対象
 
-現在は BMP 初期対応を実装中である。
+現在は BMP 初期対応の仕様と実装を確認中である。
 一次資料は `memo/bmp-spec.md` とする。
 
 現行の実装方針:
@@ -19,6 +19,8 @@
 - top-level `EncodeFormat` は `EncodeFormat::Bmp(BmpEncodeOptions)` とする。
 - BMP も top-level native API に追加し、`NativeImage::Bmp(BmpImage)` として扱う。
 - `bfSize` と実データ長の不一致は、それだけでは不正な入力として扱わない。
+- native encode は native representation の field をできるだけそのまま書き出す。
+- native field の file layout 整合性確認には `BmpImage::validate_file_layout` を使う。
 - 未対応 DIB header、bit depth、compression は `UnsupportedFormat` として扱う。
 
 ## 現在の実装内容
@@ -33,17 +35,16 @@
 - `BmpColorTableEntry`
 - `bmp::decode_native`
 - `bmp::encode_native`
+- `BmpImage::validate_file_layout`
 - `image_view_to_bmp_native`
 - `NativeImage::Bmp(BmpImage)`
 - `EncodeFormat::Bmp(BmpEncodeOptions)`
 
 ## 次に確認すること
 
-- `BmpImage` の public field 構成がこのブランチ内の実装に十分か確認する。
-- `BmpImage` が保持する `pixel_array` は file 上の BGR + padding 込み data として扱う方針でよいか確認する。
-- `encode_native` で `bfSize` / `biSizeImage` の不一致をどの程度 strict に拒否するか確認する。
-- `decode_all_native` で BMP を引き続き `UnsupportedFormat` にする方針でよいか確認する。
-- README と examples の説明が新 API に追従しているか確認する。
+- `make ci` が通る状態を維持する。
+- README に `validate_file_layout` の説明を追加するか確認する。
+- `bmp-spec.md` の初期対応範囲と実装・テストにズレがないか最終確認する。
 
 ## 実装確認
 
