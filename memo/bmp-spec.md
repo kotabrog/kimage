@@ -70,6 +70,14 @@ pixel array より前に必要な領域の途中を指す場合は不正な head
 `bfOffBits` が入力長を超える場合も不正な header として扱う。
 `bfOffBits` と pixel array の間に unknown gap bytes がある場合、
 generic decode ではその gap bytes を無視し、native representation にも保持しない。
+そのため、decode では `bfOffBits >= expected_min_pixel_offset` を受け入れるが、
+`BmpImage::validate_file_layout` では `bfOffBits == expected_min_pixel_offset` を要求する。
+`validate_file_layout` は、native representation が保持している領域だけで
+`encode_native` した場合に file layout が整合するかを確認するためである。
+初期版の 24-bit `BI_RGB` + `BITMAPINFOHEADER` では、
+`expected_min_pixel_offset` は `14 + 40 = 54` である。
+後続版で color masks や color table を保持する場合は、
+それらの byte size を加えた値を `expected_min_pixel_offset` とする。
 
 ## DIB header
 
@@ -422,6 +430,8 @@ generic encode のような正規化 API ではない。
 `BmpImage::validate_file_layout` を使う。
 この validation は、このクレートが現在対応している BMP 構造の範囲で、
 `bfOffBits`、`bfSize`、`biSizeImage`、pixel array length などの整合性を検査する。
+`BI_RGB` の `biSizeImage == 0` は BMP 仕様上許容されるため、
+`validate_file_layout` でも整合した layout として扱う。
 `decode_native` は unknown gap bytes を保持しないため、
 `decode_native` で得た `BmpImage` が常に `validate_file_layout` を通るとは限らない。
 

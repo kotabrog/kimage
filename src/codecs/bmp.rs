@@ -286,7 +286,8 @@ impl BmpImage {
                 bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
             })?;
 
-        if self.file_header.pixel_offset != PIXEL_OFFSET {
+        let expected_pixel_offset = expected_min_pixel_offset(self)?;
+        if self.file_header.pixel_offset != expected_pixel_offset {
             return Err(ImageError::InvalidHeader {
                 reason: "invalid pixel data offset",
             });
@@ -454,6 +455,16 @@ fn validate_bmp_image_pixels(image: &BmpImage) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn expected_min_pixel_offset(image: &BmpImage) -> Result<u32> {
+    let BmpDibHeader::BitmapInfoHeader(_) = &image.dib_header;
+
+    if !image.color_masks.is_empty() || !image.color_table.is_empty() {
+        return Err(ImageError::UnsupportedFormat);
+    }
+
+    Ok(PIXEL_OFFSET)
 }
 
 fn validate_supported_info_header(info_header: &BmpInfoHeader) -> Result<()> {
@@ -652,6 +663,15 @@ mod tests {
                 reason: "invalid BMP image size"
             }
         );
+    }
+
+    #[test]
+    fn validate_file_layout_allows_zero_image_size_for_bi_rgb() {
+        let mut image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
+        let BmpDibHeader::BitmapInfoHeader(info_header) = &mut image.dib_header;
+        info_header.image_size = 0;
+
+        image.validate_file_layout().unwrap();
     }
 
     #[test]
