@@ -45,6 +45,11 @@ kimage::encode_native(&mut writer, &native)?;
 kimage::encode_all_native(&mut writer, &images)?;
 ```
 
+For BMP, `encode_native` writes native header fields as provided instead of
+normalizing them. Use `BmpImage::validate_file_layout` when you want to check
+whether the BMP header fields and pixel array describe a consistent file layout
+before writing.
+
 For format-specific behavior, use the modules under `kimage::codecs`.
 
 ## Cargo Features
@@ -109,6 +114,14 @@ Supported:
 - uncompressed 24-bit bottom-up and top-down BMP
 - `BITMAPINFOHEADER`
 - native BMP APIs that preserve BMP header fields and pixel array data
+- `BmpImage::validate_file_layout` for checking native BMP file layout consistency
+
+Notes:
+
+- BMP native encode preserves native fields as much as possible and is not a
+  normalization API.
+- BMP native APIs do not guarantee byte-for-byte roundtrips. Unknown gap bytes
+  before the pixel array are not preserved.
 
 Unsupported:
 

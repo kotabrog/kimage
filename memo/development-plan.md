@@ -43,8 +43,56 @@
 ## 次に確認すること
 
 - `make ci` が通る状態を維持する。
-- README に `validate_file_layout` の説明を追加するか確認する。
 - `bmp-spec.md` の初期対応範囲と実装・テストにズレがないか最終確認する。
+
+## 今後の BMP 対応計画
+
+### 1. BMP native API の仕上げ
+
+- このブランチの初期 BMP native API を一区切りにできる状態にする。
+
+### 2. file layout 周りの仕様固定
+
+- unknown gap bytes を保持しない方針を前提に、`validate_file_layout` の判定基準を明確に保つ。
+- color table / color masks を追加する前に、`bfOffBits` の最小値計算方針を整理する。
+- 可能なら小さな unit test を追加して file layout の境界を固定する。
+
+### 3. 8-bit indexed color BMP の native decode
+
+- `BITMAPINFOHEADER + BI_RGB + 8-bit indexed color` を対象にする。
+- color table を `BmpImage::color_table` に読み込む。
+- pixel array は index data + padding 込みの file 上表現として保持する。
+- この段階では `to_image()` / generic decode は `UnsupportedFormat` のままでもよい。
+
+### 4. 8-bit indexed color BMP の generic decode
+
+- color table を使って `PixelFormat::Rgb8` に展開する。
+- `biClrUsed == 0` と非 0 の color table entry 数を扱う。
+- pixel index が color table の範囲外を参照する場合は不正な raster として扱う。
+
+### 5. 1-bit / 4-bit indexed color BMP decode
+
+- packed pixel index の読み取りを追加する。
+- color table を使って `PixelFormat::Rgb8` に展開する。
+- 既存の PBM bit packing 実装を参考にし、row padding の扱いを BMP 仕様に合わせる。
+
+### 6. 16-bit / 32-bit `BI_BITFIELDS`
+
+- color masks を読み取る。
+- mask の重複、連続 bit、必要 mask の欠落を validation する。
+- mask から取り出した channel value の正規化方法を仕様化して実装する。
+
+### 7. `BITMAPV4HEADER` / `BITMAPV5HEADER`
+
+- V4 / V5 固有 field を native representation に保持するかを決める。
+- generic decode では当面、色空間変換や gamma 補正を行わない方針を維持する。
+- ICC profile data を native API で保持するかを検討する。
+
+### 8. RLE decode
+
+- `BI_RLE8` / `BI_RLE4` の decode 対応を検討する。
+- encoded mode、absolute mode、end-of-line、end-of-bitmap、delta escape を扱う。
+- RLE compression と top-down BMP の組み合わせは不正な header として扱う。
 
 ## 実装確認
 
