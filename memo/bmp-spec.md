@@ -411,6 +411,16 @@ native representation で保持する対象は以下である。
 
 BMP native representation は top-level native API にも追加し、
 `decode_native` / `encode_native` では `NativeImage::Bmp(BmpImage)` として扱う。
+`encode_native` は native representation の field をできるだけそのまま書き出す API であり、
+generic encode のような正規化 API ではない。
+利用側が native field を矛盾する形に変更した場合、出力 BMP が仕様上不正になる可能性がある。
+ただし、このクレートが未対応としている構造や、安全に書き出せない buffer 長不足などはエラーにする。
+出力される BMP の file layout が整合しているか確認したい場合は、
+`BmpImage::validate_file_layout` を使う。
+この validation は、このクレートが現在対応している BMP 構造の範囲で、
+`bfOffBits`、`bfSize`、`biSizeImage`、pixel array length などの整合性を検査する。
+`decode_native` は unknown gap bytes を保持しないため、
+`decode_native` で得た `BmpImage` が常に `validate_file_layout` を通るとは限らない。
 
 V4 / V5 対応を追加する場合は、次も保持対象に加える。
 

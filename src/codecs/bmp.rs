@@ -199,7 +199,7 @@ pub fn encode<W: Write>(
 
 /// Encodes a native BMP image.
 pub fn encode_native<W: Write>(writer: &mut W, image: &BmpImage) -> Result<()> {
-    validate_native_bmp_image(image)?;
+    validate_bmp_image_pixels(image)?;
 
     let BmpDibHeader::BitmapInfoHeader(info_header) = &image.dib_header;
 
@@ -260,6 +260,51 @@ impl BmpImage {
         }
 
         Image::new(width, height, PixelFormat::Rgb8, pixels)
+    }
+
+    /// Validates whether the native fields describe a consistent BMP file layout.
+    pub fn validate_file_layout(&self) -> Result<()> {
+        validate_bmp_image_pixels(self)?;
+
+        let BmpDibHeader::BitmapInfoHeader(info_header) = &self.dib_header;
+        let width = info_header.width as u32;
+        let height = info_header.height.unsigned_abs();
+        let image_size = bmp_pixel_array_len(width, height)?;
+        let image_size_u32 =
+            u32::try_from(image_size).map_err(|_| ImageError::ImageDimensionsTooLarge {
+                width,
+                height,
+                bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
+            })?;
+        let expected_file_size = self
+            .file_header
+            .pixel_offset
+            .checked_add(image_size_u32)
+            .ok_or(ImageError::ImageDimensionsTooLarge {
+                width,
+                height,
+                bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
+            })?;
+
+        if self.file_header.pixel_offset != PIXEL_OFFSET {
+            return Err(ImageError::InvalidHeader {
+                reason: "invalid pixel data offset",
+            });
+        }
+
+        if self.file_header.file_size != expected_file_size {
+            return Err(ImageError::InvalidHeader {
+                reason: "invalid BMP file size",
+            });
+        }
+
+        if info_header.image_size != 0 && info_header.image_size != image_size_u32 {
+            return Err(ImageError::InvalidHeader {
+                reason: "invalid BMP image size",
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -384,44 +429,6 @@ fn write_rgb24_bmp_row<W: Write>(
 
     for pixel in row.chunks_exact(3) {
         writer.write_all(&[pixel[2], pixel[1], pixel[0]])?;
-    }
-
-    Ok(())
-}
-
-fn validate_native_bmp_image(image: &BmpImage) -> Result<()> {
-    validate_bmp_image_pixels(image)?;
-
-    let BmpDibHeader::BitmapInfoHeader(info_header) = &image.dib_header;
-    let width = info_header.width as u32;
-    let height = info_header.height.unsigned_abs();
-    let image_size = bmp_pixel_array_len(width, height)?;
-    let image_size_u32 =
-        u32::try_from(image_size).map_err(|_| ImageError::ImageDimensionsTooLarge {
-            width,
-            height,
-            bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
-        })?;
-    let expected_file_size = image
-        .file_header
-        .pixel_offset
-        .checked_add(image_size_u32)
-        .ok_or(ImageError::ImageDimensionsTooLarge {
-            width,
-            height,
-            bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
-        })?;
-
-    if image.file_header.file_size != expected_file_size {
-        return Err(ImageError::InvalidHeader {
-            reason: "invalid BMP file size",
-        });
-    }
-
-    if info_header.image_size != 0 && info_header.image_size != image_size_u32 {
-        return Err(ImageError::InvalidHeader {
-            reason: "invalid BMP image size",
-        });
     }
 
     Ok(())
@@ -599,6 +606,55 @@ mod tests {
     }
 
     #[test]
+    fn validate_file_layout_accepts_consistent_bmp_image() {
+        let image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
+
+        image.validate_file_layout().unwrap();
+    }
+
+    #[test]
+    fn validate_file_layout_rejects_pixel_offset_after_unknown_gap() {
+        let image = decode_native(&mut Cursor::new(two_by_two_bmp_with_pixel_gap())).unwrap();
+        let error = image.validate_file_layout().unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "invalid pixel data offset"
+            }
+        );
+    }
+
+    #[test]
+    fn validate_file_layout_rejects_inconsistent_file_size() {
+        let mut image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
+        image.file_header.file_size += 1;
+        let error = image.validate_file_layout().unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "invalid BMP file size"
+            }
+        );
+    }
+
+    #[test]
+    fn validate_file_layout_rejects_inconsistent_nonzero_image_size() {
+        let mut image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
+        let BmpDibHeader::BitmapInfoHeader(info_header) = &mut image.dib_header;
+        info_header.image_size += 1;
+        let error = image.validate_file_layout().unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "invalid BMP image size"
+            }
+        );
+    }
+
+    #[test]
     fn decode_allows_file_size_larger_than_input_when_pixels_are_present() {
         let mut input = two_by_two_bmp();
         input[2..6].copy_from_slice(&100_u32.to_le_bytes());
@@ -771,6 +827,29 @@ mod tests {
 
         assert_eq!(&output[6..8], &1_u16.to_le_bytes());
         assert_eq!(&output[8..10], &2_u16.to_le_bytes());
+    }
+
+    #[test]
+    fn encode_native_preserves_inconsistent_file_header_fields() {
+        let mut image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
+        image.file_header.file_size += 1;
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(&output[2..6], &71_u32.to_le_bytes());
+    }
+
+    #[test]
+    fn encode_native_preserves_inconsistent_nonzero_image_size() {
+        let mut image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
+        let BmpDibHeader::BitmapInfoHeader(info_header) = &mut image.dib_header;
+        info_header.image_size += 1;
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(&output[34..38], &17_u32.to_le_bytes());
     }
 
     #[test]
