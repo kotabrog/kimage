@@ -5,7 +5,7 @@ use std::process::Command;
 
 use kimage::{
     EncodeFormat, Image, PixelFormat,
-    codecs::{PamEncodeTupleType, pnm::PnmEncodeFormat},
+    codecs::{PamEncodeTupleType, bmp::BmpEncodeOptions, pnm::PnmEncodeFormat},
     decode, encode,
 };
 
@@ -32,7 +32,11 @@ fn main() -> kimage::Result<()> {
         PAM_OUTPUT_PATH,
         EncodeFormat::Pam(PamEncodeTupleType::Rgb),
     )?;
-    roundtrip(&image, BMP_OUTPUT_PATH, EncodeFormat::Bmp)?;
+    roundtrip(
+        &image,
+        BMP_OUTPUT_PATH,
+        EncodeFormat::Bmp(BmpEncodeOptions::default()),
+    )?;
 
     println!("Top-level encode roundtrip succeeded:");
     println!("  {}", PNM_OUTPUT_PATH);

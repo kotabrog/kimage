@@ -13,7 +13,7 @@ let image = kimage::decode(&mut reader)?;
 ```
 
 Use `kimage::decode_native` when you need format-specific values such as Netpbm
-`maxval` or PAM tuple metadata:
+`maxval`, PAM tuple metadata, or BMP header fields:
 
 ```rust
 let native = kimage::decode_native(&mut reader)?;
@@ -30,11 +30,15 @@ Use `kimage::encode` with an explicit `EncodeFormat` to write a generic image
 view:
 
 ```rust
-kimage::encode(&mut writer, image.as_view(), kimage::EncodeFormat::Bmp)?;
+kimage::encode(
+    &mut writer,
+    image.as_view(),
+    kimage::EncodeFormat::Bmp(kimage::codecs::bmp::BmpEncodeOptions::default()),
+)?;
 ```
 
 Use `kimage::encode_native` and `kimage::encode_all_native` to write native
-Netpbm or PAM values:
+format-specific values:
 
 ```rust
 kimage::encode_native(&mut writer, &native)?;
@@ -61,10 +65,11 @@ Available features:
 The current implementations intentionally cover only small, early subsets of each format.
 
 Top-level `kimage::decode` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, PAM P7, and BMP.
-Top-level `kimage::decode_native` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, and PAM P7.
+Top-level `kimage::decode_native` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, PAM P7, and BMP.
 Top-level `kimage::decode_all_native` supports multi-image PBM P4, PGM P5, PPM P6, and PAM P7 streams.
 Top-level `kimage::encode` supports PBM P1/P4, PGM P2/P5, PPM P3/P6, PAM P7, and BMP.
-Top-level `kimage::encode_native` and `kimage::encode_all_native` support binary PBM P4, PGM P5, PPM P6, and PAM P7.
+Top-level `kimage::encode_native` supports binary PBM P4, PGM P5, PPM P6, PAM P7, and BMP.
+Top-level `kimage::encode_all_native` supports binary PBM P4, PGM P5, PPM P6, and PAM P7.
 
 ### PBM / PGM / PPM
 
@@ -101,12 +106,12 @@ Unsupported:
 
 Supported:
 
-- uncompressed 24-bit bottom-up BMP
+- uncompressed 24-bit bottom-up and top-down BMP
 - `BITMAPINFOHEADER`
+- native BMP APIs that preserve BMP header fields and pixel array data
 
 Unsupported:
 
-- top-down BMP
 - palette BMP
 - compressed BMP
 - BMP bit depths other than 24-bit

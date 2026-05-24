@@ -2,7 +2,10 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::Path;
 
-use kimage::{ImageView, PixelFormat, codecs::bmp};
+use kimage::{
+    ImageView, PixelFormat,
+    codecs::bmp::{self, BmpEncodeOptions},
+};
 
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 64;
@@ -19,7 +22,7 @@ fn main() -> kimage::Result<()> {
     }
 
     let mut file = File::create(path)?;
-    bmp::encode(&mut file, image)?;
+    bmp::encode(&mut file, image, BmpEncodeOptions::default())?;
     drop(file);
 
     let file = File::open(path)?;

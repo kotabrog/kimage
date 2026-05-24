@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::io::{Read, Write};
 
 #[cfg(feature = "bmp")]
-use crate::codecs::bmp;
+use crate::codecs::bmp::{self, BmpEncodeOptions, BmpImage};
 #[cfg(feature = "netpbm")]
 use crate::codecs::{NetpbmImage, PamEncodeTupleType, PamImage, pam, pbm, pgm, pnm, ppm};
 use crate::{Image, ImageError, ImageView, Result};
@@ -35,6 +35,8 @@ pub enum NativeImage {
     Netpbm(NetpbmImage),
     #[cfg(feature = "netpbm")]
     Pam(PamImage),
+    #[cfg(feature = "bmp")]
+    Bmp(BmpImage),
 }
 
 /// Output format used when encoding a generic image view.
@@ -45,7 +47,7 @@ pub enum EncodeFormat {
     #[cfg(feature = "netpbm")]
     Pam(PamEncodeTupleType),
     #[cfg(feature = "bmp")]
-    Bmp,
+    Bmp(BmpEncodeOptions),
 }
 
 impl NativeImage {
@@ -56,6 +58,8 @@ impl NativeImage {
             Self::Netpbm(image) => image.to_image(),
             #[cfg(feature = "netpbm")]
             Self::Pam(image) => image.to_image(),
+            #[cfg(feature = "bmp")]
+            Self::Bmp(image) => image.to_image(),
             #[allow(unreachable_patterns)]
             _ => Err(ImageError::UnsupportedFormat),
         }
@@ -71,8 +75,6 @@ pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
 
 /// Decodes a native image by detecting its format from the input bytes.
 ///
-/// BMP does not currently have a native representation and returns
-/// `ImageError::UnsupportedFormat`.
 pub fn decode_native<R: Read>(reader: &mut R) -> Result<NativeImage> {
     let mut data = Vec::new();
     reader.read_to_end(&mut data)?;
@@ -107,7 +109,7 @@ pub fn encode<W: Write>(writer: &mut W, image: ImageView<'_>, format: EncodeForm
             #[cfg(feature = "netpbm")]
             EncodeFormat::Pam(tuple_type) => pam::encode(&mut buffer, image, tuple_type)?,
             #[cfg(feature = "bmp")]
-            EncodeFormat::Bmp => bmp::encode(&mut buffer, image)?,
+            EncodeFormat::Bmp(options) => bmp::encode(&mut buffer, image, options)?,
         }
 
         writer.write_all(&buffer)?;
@@ -122,6 +124,8 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &NativeImage) -> Result<()
         NativeImage::Netpbm(image) => pnm::encode_native(writer, image),
         #[cfg(feature = "netpbm")]
         NativeImage::Pam(image) => pam::encode_native(writer, image),
+        #[cfg(feature = "bmp")]
+        NativeImage::Bmp(image) => bmp::encode_native(writer, image),
         #[allow(unreachable_patterns)]
         _ => {
             let _ = writer;
@@ -156,6 +160,8 @@ pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NativeImage]) -> Re
                     .map(|image| match image {
                         NativeImage::Netpbm(image) => Ok(image.clone()),
                         NativeImage::Pam(_) => Err(ImageError::UnsupportedFormat),
+                        #[cfg(feature = "bmp")]
+                        NativeImage::Bmp(_) => Err(ImageError::UnsupportedFormat),
                     })
                     .collect::<Result<Vec<_>>>()?;
                 pnm::encode_all_native(&mut buffer, &images)?;
@@ -167,6 +173,8 @@ pub fn encode_all_native<W: Write>(writer: &mut W, images: &[NativeImage]) -> Re
                     .map(|image| match image {
                         NativeImage::Pam(image) => Ok(image.clone()),
                         NativeImage::Netpbm(_) => Err(ImageError::UnsupportedFormat),
+                        #[cfg(feature = "bmp")]
+                        NativeImage::Bmp(_) => Err(ImageError::UnsupportedFormat),
                     })
                     .collect::<Result<Vec<_>>>()?;
                 pam::encode_all_native(&mut buffer, &images)?;
@@ -232,7 +240,9 @@ fn decode_native_from_slice(data: &[u8]) -> Result<NativeImage> {
             data,
         ))?)),
         #[cfg(feature = "bmp")]
-        ImageFormat::Bmp => Err(ImageError::UnsupportedFormat),
+        ImageFormat::Bmp => Ok(NativeImage::Bmp(bmp::decode_native(&mut Cursor::new(
+            data,
+        ))?)),
     }
 }
 
@@ -290,6 +300,9 @@ mod tests {
     use std::io::Cursor;
 
     use crate::PixelFormat;
+    use crate::codecs::bmp::{
+        BmpDibHeader, BmpEncodeOptions, BmpFileHeader, BmpImage, BmpInfoHeader,
+    };
     use crate::codecs::pnm::PnmEncodeFormat;
     use crate::codecs::{NetpbmImage, PamTupleType};
 
@@ -464,15 +477,40 @@ mod tests {
     }
 
     #[test]
-    fn decode_native_rejects_bmp() {
+    fn decode_native_detects_bmp() {
         let input = [
             0x42, 0x4d, 0x3a, 0, 0, 0, 0, 0, 0, 0, 0x36, 0, 0, 0, 0x28, 0, 0, 0, 1, 0, 0, 0, 1, 0,
             0, 0, 1, 0, 0x18, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0x80, 0, 0xff, 0,
         ];
-        let error = decode_native(&mut Cursor::new(input)).unwrap_err();
+        let image = decode_native(&mut Cursor::new(input)).unwrap();
 
-        assert_eq!(error, ImageError::UnsupportedFormat);
+        assert_eq!(
+            image,
+            NativeImage::Bmp(BmpImage {
+                file_header: BmpFileHeader {
+                    file_size: 58,
+                    reserved1: 0,
+                    reserved2: 0,
+                    pixel_offset: 54,
+                },
+                dib_header: BmpDibHeader::BitmapInfoHeader(BmpInfoHeader {
+                    width: 1,
+                    height: 1,
+                    planes: 1,
+                    bits_per_pixel: 24,
+                    compression: 0,
+                    image_size: 4,
+                    x_pixels_per_meter: 0,
+                    y_pixels_per_meter: 0,
+                    colors_used: 0,
+                    important_colors: 0,
+                }),
+                color_masks: Vec::new(),
+                color_table: Vec::new(),
+                pixel_array: vec![0x80, 0, 0xff, 0],
+            })
+        );
     }
 
     #[test]
@@ -661,7 +699,12 @@ mod tests {
         let image = Image::new(1, 1, PixelFormat::Rgb8, vec![255, 0, 128]).unwrap();
         let mut output = Vec::new();
 
-        encode(&mut output, image.as_view(), EncodeFormat::Bmp).unwrap();
+        encode(
+            &mut output,
+            image.as_view(),
+            EncodeFormat::Bmp(BmpEncodeOptions::default()),
+        )
+        .unwrap();
 
         let decoded = decode(&mut Cursor::new(output)).unwrap();
         assert_eq!(decoded.pixel_format, PixelFormat::Rgb8);
@@ -673,7 +716,12 @@ mod tests {
         let image = Image::new(1, 1, PixelFormat::Gray8, vec![128]).unwrap();
         let mut output = b"unchanged".to_vec();
 
-        let error = encode(&mut output, image.as_view(), EncodeFormat::Bmp).unwrap_err();
+        let error = encode(
+            &mut output,
+            image.as_view(),
+            EncodeFormat::Bmp(BmpEncodeOptions::default()),
+        )
+        .unwrap_err();
 
         assert_eq!(
             error,
@@ -708,6 +756,38 @@ mod tests {
             maxval: 255,
             tuple_type: Some(PamTupleType::Rgb),
             data: vec![255, 0, 128],
+        });
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(decode_native(&mut Cursor::new(output)).unwrap(), image);
+    }
+
+    #[test]
+    fn encode_native_writes_bmp_image() {
+        let image = NativeImage::Bmp(BmpImage {
+            file_header: BmpFileHeader {
+                file_size: 58,
+                reserved1: 0,
+                reserved2: 0,
+                pixel_offset: 54,
+            },
+            dib_header: BmpDibHeader::BitmapInfoHeader(BmpInfoHeader {
+                width: 1,
+                height: 1,
+                planes: 1,
+                bits_per_pixel: 24,
+                compression: 0,
+                image_size: 4,
+                x_pixels_per_meter: 0,
+                y_pixels_per_meter: 0,
+                colors_used: 0,
+                important_colors: 0,
+            }),
+            color_masks: Vec::new(),
+            color_table: Vec::new(),
+            pixel_array: vec![0x80, 0, 0xff, 0],
         });
         let mut output = Vec::new();
 
