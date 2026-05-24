@@ -7,8 +7,10 @@ const FILE_HEADER_SIZE: u32 = 14;
 const INFO_HEADER_SIZE: u32 = 40;
 const PIXEL_OFFSET: u32 = FILE_HEADER_SIZE + INFO_HEADER_SIZE;
 const PLANES: u16 = 1;
+const BITS_PER_PIXEL_INDEXED8: u16 = 8;
 const BITS_PER_PIXEL_RGB24: u16 = 24;
 const COMPRESSION_BI_RGB: u32 = 0;
+const COLOR_TABLE_ENTRY_SIZE: u32 = 4;
 
 /// Output options used when encoding a generic image view as BMP.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -156,12 +158,16 @@ pub fn decode_native<R: Read>(reader: &mut R) -> Result<BmpImage> {
         important_colors: read_u32_le(&mut cursor)?,
     };
 
-    validate_supported_info_header(&info_header)?;
+    validate_supported_native_info_header(&info_header)?;
 
     let width = info_header.width as u32;
     let height = info_header.height.unsigned_abs();
-    let pixel_offset = validate_pixel_offset(file_header.pixel_offset, data.len())?;
-    let pixel_data_len = bmp_pixel_array_len(width, height)?;
+    let color_table_entry_count = color_table_entry_count(&info_header)?;
+    let min_pixel_offset = expected_min_pixel_offset_for_color_table(color_table_entry_count)?;
+    let pixel_offset =
+        validate_pixel_offset(file_header.pixel_offset, data.len(), min_pixel_offset)?;
+    let color_table = read_color_table(&data, color_table_entry_count)?;
+    let pixel_data_len = bmp_pixel_array_len(width, height, info_header.bits_per_pixel)?;
     let pixel_end =
         pixel_offset
             .checked_add(pixel_data_len)
@@ -182,7 +188,7 @@ pub fn decode_native<R: Read>(reader: &mut R) -> Result<BmpImage> {
         file_header,
         dib_header: BmpDibHeader::BitmapInfoHeader(info_header),
         color_masks: Vec::new(),
-        color_table: Vec::new(),
+        color_table,
         pixel_array: data[pixel_offset..pixel_end].to_vec(),
     })
 }
@@ -220,6 +226,9 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &BmpImage) -> Result<()> {
     write_i32_le(writer, info_header.y_pixels_per_meter)?;
     write_u32_le(writer, info_header.colors_used)?;
     write_u32_le(writer, info_header.important_colors)?;
+    for entry in &image.color_table {
+        writer.write_all(&[entry.blue, entry.green, entry.red, entry.reserved])?;
+    }
     writer.write_all(&image.pixel_array)?;
 
     Ok(())
@@ -228,12 +237,13 @@ pub fn encode_native<W: Write>(writer: &mut W, image: &BmpImage) -> Result<()> {
 impl BmpImage {
     /// Converts this native BMP image into the generic normalized image buffer.
     pub fn to_image(&self) -> Result<Image> {
+        let BmpDibHeader::BitmapInfoHeader(info_header) = &self.dib_header;
+        validate_supported_generic_info_header(info_header)?;
         validate_bmp_image_pixels(self)?;
 
-        let BmpDibHeader::BitmapInfoHeader(info_header) = &self.dib_header;
         let width = info_header.width as u32;
         let height = info_header.height.unsigned_abs();
-        let row_size = bmp_row_size(width)?;
+        let row_size = bmp_row_size(width, info_header.bits_per_pixel)?;
         let row_len = rgb24_row_len(width)?;
         let mut pixels = Vec::with_capacity(
             (width as usize)
@@ -269,7 +279,7 @@ impl BmpImage {
         let BmpDibHeader::BitmapInfoHeader(info_header) = &self.dib_header;
         let width = info_header.width as u32;
         let height = info_header.height.unsigned_abs();
-        let image_size = bmp_pixel_array_len(width, height)?;
+        let image_size = bmp_pixel_array_len(width, height, info_header.bits_per_pixel)?;
         let image_size_u32 =
             u32::try_from(image_size).map_err(|_| ImageError::ImageDimensionsTooLarge {
                 width,
@@ -304,6 +314,8 @@ impl BmpImage {
                 reason: "invalid BMP image size",
             });
         }
+
+        validate_color_table_layout(&self.color_table)?;
 
         Ok(())
     }
@@ -355,8 +367,8 @@ fn image_view_to_rgb24_bmp_native(
             bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
         })?;
 
-    let row_size = bmp_row_size(image.width)?;
-    let image_size = bmp_pixel_array_len(image.width, image.height)?;
+    let row_size = bmp_row_size(image.width, BITS_PER_PIXEL_RGB24)?;
+    let image_size = bmp_pixel_array_len(image.width, image.height, BITS_PER_PIXEL_RGB24)?;
     let image_size_u32 =
         u32::try_from(image_size).map_err(|_| ImageError::ImageDimensionsTooLarge {
             width: image.width,
@@ -436,16 +448,17 @@ fn write_rgb24_bmp_row<W: Write>(
 }
 
 fn validate_bmp_image_pixels(image: &BmpImage) -> Result<()> {
-    if !image.color_masks.is_empty() || !image.color_table.is_empty() {
+    if !image.color_masks.is_empty() {
         return Err(ImageError::UnsupportedFormat);
     }
 
     let BmpDibHeader::BitmapInfoHeader(info_header) = &image.dib_header;
-    validate_supported_info_header(info_header)?;
+    validate_supported_native_info_header(info_header)?;
+    validate_color_table(info_header, &image.color_table)?;
 
     let width = info_header.width as u32;
     let height = info_header.height.unsigned_abs();
-    let image_size = bmp_pixel_array_len(width, height)?;
+    let image_size = bmp_pixel_array_len(width, height, info_header.bits_per_pixel)?;
 
     if image.pixel_array.len() != image_size {
         return Err(ImageError::InvalidBufferLength {
@@ -458,27 +471,24 @@ fn validate_bmp_image_pixels(image: &BmpImage) -> Result<()> {
 }
 
 fn expected_min_pixel_offset(image: &BmpImage) -> Result<u32> {
-    let BmpDibHeader::BitmapInfoHeader(_) = &image.dib_header;
+    let BmpDibHeader::BitmapInfoHeader(info_header) = &image.dib_header;
 
-    if !image.color_masks.is_empty() || !image.color_table.is_empty() {
+    if !image.color_masks.is_empty() {
         return Err(ImageError::UnsupportedFormat);
     }
 
-    Ok(PIXEL_OFFSET)
+    let expected_color_table_entry_count = color_table_entry_count(info_header)?;
+    if image.color_table.len() != expected_color_table_entry_count {
+        return Err(ImageError::InvalidHeader {
+            reason: "invalid BMP color table length",
+        });
+    }
+
+    expected_min_pixel_offset_for_color_table(image.color_table.len())
 }
 
-fn validate_supported_info_header(info_header: &BmpInfoHeader) -> Result<()> {
-    if info_header.width <= 0 || info_header.height == 0 {
-        return Err(ImageError::InvalidHeader {
-            reason: "width and height must be non-zero, and width must be positive",
-        });
-    }
-
-    if info_header.planes != PLANES {
-        return Err(ImageError::InvalidHeader {
-            reason: "invalid BMP planes value",
-        });
-    }
+fn validate_supported_generic_info_header(info_header: &BmpInfoHeader) -> Result<()> {
+    validate_supported_info_header_shape(info_header)?;
 
     if info_header.bits_per_pixel != BITS_PER_PIXEL_RGB24 {
         return Err(ImageError::UnsupportedFormat);
@@ -491,14 +501,137 @@ fn validate_supported_info_header(info_header: &BmpInfoHeader) -> Result<()> {
     Ok(())
 }
 
-fn validate_pixel_offset(pixel_offset: u32, input_len: usize) -> Result<usize> {
-    if pixel_offset < PIXEL_OFFSET || pixel_offset as usize > input_len {
+fn validate_supported_native_info_header(info_header: &BmpInfoHeader) -> Result<()> {
+    validate_supported_info_header_shape(info_header)?;
+
+    match (info_header.bits_per_pixel, info_header.compression) {
+        (BITS_PER_PIXEL_INDEXED8 | BITS_PER_PIXEL_RGB24, COMPRESSION_BI_RGB) => Ok(()),
+        (_, COMPRESSION_BI_RGB) => Err(ImageError::UnsupportedFormat),
+        _ => Err(ImageError::UnsupportedFormat),
+    }
+}
+
+fn validate_supported_info_header_shape(info_header: &BmpInfoHeader) -> Result<()> {
+    if info_header.width <= 0 || info_header.height == 0 {
+        return Err(ImageError::InvalidHeader {
+            reason: "width and height must be non-zero, and width must be positive",
+        });
+    }
+
+    if info_header.planes != PLANES {
+        return Err(ImageError::InvalidHeader {
+            reason: "invalid BMP planes value",
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_pixel_offset(
+    pixel_offset: u32,
+    input_len: usize,
+    min_pixel_offset: u32,
+) -> Result<usize> {
+    if pixel_offset < min_pixel_offset || pixel_offset as usize > input_len {
         return Err(ImageError::InvalidHeader {
             reason: "invalid pixel data offset",
         });
     }
 
     Ok(pixel_offset as usize)
+}
+
+fn color_table_entry_count(info_header: &BmpInfoHeader) -> Result<usize> {
+    if info_header.bits_per_pixel != BITS_PER_PIXEL_INDEXED8 {
+        return Ok(0);
+    }
+
+    let max_entries = 1_usize << BITS_PER_PIXEL_INDEXED8;
+    if info_header.colors_used == 0 {
+        return Ok(max_entries);
+    }
+
+    let colors_used =
+        usize::try_from(info_header.colors_used).map_err(|_| ImageError::InvalidHeader {
+            reason: "invalid BMP color table length",
+        })?;
+    if colors_used > max_entries {
+        return Err(ImageError::InvalidHeader {
+            reason: "invalid BMP color table length",
+        });
+    }
+
+    Ok(colors_used)
+}
+
+fn read_color_table(data: &[u8], entry_count: usize) -> Result<Vec<BmpColorTableEntry>> {
+    let table_bytes = entry_count
+        .checked_mul(COLOR_TABLE_ENTRY_SIZE as usize)
+        .ok_or(ImageError::InvalidHeader {
+            reason: "invalid BMP color table length",
+        })?;
+    let table_start = PIXEL_OFFSET as usize;
+    let table_end = table_start
+        .checked_add(table_bytes)
+        .ok_or(ImageError::InvalidHeader {
+            reason: "invalid BMP color table length",
+        })?;
+
+    if table_end > data.len() {
+        return Err(ImageError::InvalidBufferLength {
+            expected: table_end,
+            actual: data.len(),
+        });
+    }
+
+    Ok(data[table_start..table_end]
+        .chunks_exact(COLOR_TABLE_ENTRY_SIZE as usize)
+        .map(|entry| BmpColorTableEntry {
+            blue: entry[0],
+            green: entry[1],
+            red: entry[2],
+            reserved: entry[3],
+        })
+        .collect())
+}
+
+fn validate_color_table(
+    info_header: &BmpInfoHeader,
+    color_table: &[BmpColorTableEntry],
+) -> Result<()> {
+    let expected_entry_count = color_table_entry_count(info_header)?;
+    if color_table.len() != expected_entry_count {
+        return Err(ImageError::InvalidHeader {
+            reason: "invalid BMP color table length",
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_color_table_layout(color_table: &[BmpColorTableEntry]) -> Result<()> {
+    if color_table.iter().any(|entry| entry.reserved != 0) {
+        return Err(ImageError::InvalidHeader {
+            reason: "invalid BMP color table reserved value",
+        });
+    }
+
+    Ok(())
+}
+
+fn expected_min_pixel_offset_for_color_table(entry_count: usize) -> Result<u32> {
+    let table_bytes = u32::try_from(entry_count)
+        .ok()
+        .and_then(|entry_count| entry_count.checked_mul(COLOR_TABLE_ENTRY_SIZE))
+        .ok_or(ImageError::InvalidHeader {
+            reason: "invalid BMP color table length",
+        })?;
+
+    PIXEL_OFFSET
+        .checked_add(table_bytes)
+        .ok_or(ImageError::InvalidHeader {
+            reason: "invalid BMP color table length",
+        })
 }
 
 fn bmp_orientation(height: i32) -> Result<BmpOrientation> {
@@ -531,12 +664,18 @@ fn rgb24_row_len(width: u32) -> Result<usize> {
         })
 }
 
-fn bmp_row_size(width: u32) -> Result<usize> {
-    let row_len = rgb24_row_len(width)?;
+fn bmp_row_size(width: u32, bits_per_pixel: u16) -> Result<usize> {
+    let row_bits = (width as usize)
+        .checked_mul(bits_per_pixel as usize)
+        .ok_or(ImageError::ImageDimensionsTooLarge {
+            width,
+            height: 1,
+            bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
+        })?;
 
-    row_len
-        .checked_add(3)
-        .map(|len| len / 4 * 4)
+    row_bits
+        .checked_add(31)
+        .map(|bits| bits / 32 * 4)
         .ok_or(ImageError::ImageDimensionsTooLarge {
             width,
             height: 1,
@@ -544,8 +683,8 @@ fn bmp_row_size(width: u32) -> Result<usize> {
         })
 }
 
-fn bmp_pixel_array_len(width: u32, height: u32) -> Result<usize> {
-    bmp_row_size(width)?
+fn bmp_pixel_array_len(width: u32, height: u32, bits_per_pixel: u16) -> Result<usize> {
+    bmp_row_size(width, bits_per_pixel)?
         .checked_mul(height as usize)
         .ok_or(ImageError::ImageDimensionsTooLarge {
             width,
@@ -617,8 +756,72 @@ mod tests {
     }
 
     #[test]
+    fn decode_native_reads_8_bit_indexed_bmp() {
+        let image = decode_native(&mut Cursor::new(two_by_two_indexed8_bmp())).unwrap();
+
+        assert_eq!(
+            image.file_header,
+            BmpFileHeader {
+                file_size: 70,
+                reserved1: 0,
+                reserved2: 0,
+                pixel_offset: 62,
+            }
+        );
+        assert_eq!(
+            image.dib_header,
+            BmpDibHeader::BitmapInfoHeader(BmpInfoHeader {
+                width: 2,
+                height: 2,
+                planes: 1,
+                bits_per_pixel: 8,
+                compression: 0,
+                image_size: 8,
+                x_pixels_per_meter: 0,
+                y_pixels_per_meter: 0,
+                colors_used: 2,
+                important_colors: 0,
+            })
+        );
+        assert_eq!(
+            image.color_table,
+            [
+                BmpColorTableEntry {
+                    blue: 0,
+                    green: 0,
+                    red: 0,
+                    reserved: 0,
+                },
+                BmpColorTableEntry {
+                    blue: 0,
+                    green: 0,
+                    red: 255,
+                    reserved: 0,
+                },
+            ]
+        );
+        assert_eq!(image.pixel_array, [1, 0, 0, 0, 0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn decode_native_uses_default_color_table_len_for_8_bit_bmp() {
+        let image =
+            decode_native(&mut Cursor::new(two_by_two_indexed8_bmp_with_256_colors())).unwrap();
+
+        assert_eq!(image.color_table.len(), 256);
+        assert_eq!(image.file_header.pixel_offset, 1078);
+    }
+
+    #[test]
     fn validate_file_layout_accepts_consistent_bmp_image() {
         let image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
+
+        image.validate_file_layout().unwrap();
+    }
+
+    #[test]
+    fn validate_file_layout_accepts_consistent_8_bit_indexed_bmp() {
+        let image = decode_native(&mut Cursor::new(two_by_two_indexed8_bmp())).unwrap();
 
         image.validate_file_layout().unwrap();
     }
@@ -672,6 +875,20 @@ mod tests {
         info_header.image_size = 0;
 
         image.validate_file_layout().unwrap();
+    }
+
+    #[test]
+    fn validate_file_layout_rejects_nonzero_color_table_reserved_value() {
+        let mut image = decode_native(&mut Cursor::new(two_by_two_indexed8_bmp())).unwrap();
+        image.color_table[0].reserved = 1;
+        let error = image.validate_file_layout().unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "invalid BMP color table reserved value"
+            }
+        );
     }
 
     #[test]
@@ -736,6 +953,41 @@ mod tests {
         let error = decode(&mut Cursor::new(input)).unwrap_err();
 
         assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_rejects_8_bit_indexed_bmp_for_generic_conversion() {
+        let error = decode(&mut Cursor::new(two_by_two_indexed8_bmp())).unwrap_err();
+
+        assert_eq!(error, ImageError::UnsupportedFormat);
+    }
+
+    #[test]
+    fn decode_native_rejects_8_bit_color_table_larger_than_max() {
+        let mut input = two_by_two_indexed8_bmp();
+        input[46..50].copy_from_slice(&257_u32.to_le_bytes());
+        let error = decode_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "invalid BMP color table length"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_native_rejects_pixel_offset_inside_color_table() {
+        let mut input = two_by_two_indexed8_bmp();
+        input[10..14].copy_from_slice(&58_u32.to_le_bytes());
+        let error = decode_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "invalid pixel data offset"
+            }
+        );
     }
 
     #[test]
@@ -821,6 +1073,16 @@ mod tests {
         encode_native(&mut output, &image).unwrap();
 
         assert_eq!(output, two_by_two_bmp());
+    }
+
+    #[test]
+    fn encode_native_writes_8_bit_indexed_bmp() {
+        let image = decode_native(&mut Cursor::new(two_by_two_indexed8_bmp())).unwrap();
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(output, two_by_two_indexed8_bmp());
     }
 
     #[test]
@@ -970,6 +1232,56 @@ mod tests {
 
         data.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
         data.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
+
+        data
+    }
+
+    fn two_by_two_indexed8_bmp() -> Vec<u8> {
+        two_by_two_indexed8_bmp_with_color_table(2)
+    }
+
+    fn two_by_two_indexed8_bmp_with_256_colors() -> Vec<u8> {
+        two_by_two_indexed8_bmp_with_color_table(256)
+    }
+
+    fn two_by_two_indexed8_bmp_with_color_table(color_count: usize) -> Vec<u8> {
+        let color_table_len = color_count * COLOR_TABLE_ENTRY_SIZE as usize;
+        let pixel_offset = PIXEL_OFFSET as usize + color_table_len;
+        let pixel_array = [1, 0, 0, 0, 0, 1, 0, 0];
+        let file_size = pixel_offset + pixel_array.len();
+        let mut data = Vec::new();
+
+        data.extend_from_slice(b"BM");
+        data.extend_from_slice(&(file_size as u32).to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.extend_from_slice(&(pixel_offset as u32).to_le_bytes());
+
+        data.extend_from_slice(&40_u32.to_le_bytes());
+        data.extend_from_slice(&2_i32.to_le_bytes());
+        data.extend_from_slice(&2_i32.to_le_bytes());
+        data.extend_from_slice(&1_u16.to_le_bytes());
+        data.extend_from_slice(&8_u16.to_le_bytes());
+        data.extend_from_slice(&0_u32.to_le_bytes());
+        data.extend_from_slice(&(pixel_array.len() as u32).to_le_bytes());
+        data.extend_from_slice(&0_i32.to_le_bytes());
+        data.extend_from_slice(&0_i32.to_le_bytes());
+        data.extend_from_slice(
+            &(if color_count == 256 {
+                0
+            } else {
+                color_count as u32
+            })
+            .to_le_bytes(),
+        );
+        data.extend_from_slice(&0_u32.to_le_bytes());
+
+        data.extend_from_slice(&[0, 0, 0, 0]);
+        data.extend_from_slice(&[0, 0, 255, 0]);
+        for _ in 2..color_count {
+            data.extend_from_slice(&[0, 0, 0, 0]);
+        }
+        data.extend_from_slice(&pixel_array);
 
         data
     }

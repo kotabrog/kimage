@@ -112,6 +112,7 @@ Unsupported:
 Supported:
 
 - uncompressed 24-bit bottom-up and top-down BMP
+- native decode and encode for uncompressed 8-bit indexed BMP
 - `BITMAPINFOHEADER`
 - native BMP APIs that preserve BMP header fields and pixel array data
 - `BmpImage::validate_file_layout` for checking native BMP file layout consistency
@@ -125,9 +126,10 @@ Notes:
 
 Unsupported:
 
-- palette BMP
+- generic decode for palette BMP
 - compressed BMP
-- BMP bit depths other than 24-bit
+- generic encode for palette BMP
+- BMP bit depths other than 8-bit indexed native BMP and 24-bit RGB BMP
 - alpha channels
 - color profiles and metadata
 
@@ -250,3 +252,14 @@ cargo run --example bmp_roundtrip
 ```
 
 The example writes `target/examples/bmp_roundtrip.bmp`.
+
+Run the native 8-bit indexed BMP roundtrip example to write and read back a
+palette BMP:
+
+```sh
+cargo run --example bmp_indexed8_native_roundtrip
+```
+
+The example writes `target/examples/bmp_indexed8_native_roundtrip.bmp`. If
+ImageMagick (`magick`) or Netpbm (`bmptoppm` and `pnmtopng`) is available, it
+also writes `target/examples/bmp_indexed8_native_roundtrip.png`.

@@ -76,8 +76,14 @@ generic decode ではその gap bytes を無視し、native representation に�
 `encode_native` した場合に file layout が整合するかを確認するためである。
 初期版の 24-bit `BI_RGB` + `BITMAPINFOHEADER` では、
 `expected_min_pixel_offset` は `14 + 40 = 54` である。
-後続版で color masks や color table を保持する場合は、
-それらの byte size を加えた値を `expected_min_pixel_offset` とする。
+8-bit indexed color BMP では、次の値になる。
+
+```text
+14 + 40 + color_table_entry_count * 4
+```
+
+後続版で color masks を保持する場合は、
+その byte size も加えた値を `expected_min_pixel_offset` とする。
 
 ## DIB header
 
@@ -161,9 +167,9 @@ BMP の DIB header では仕様上 1 でなければならない。
 | 0 | encoded image format 側で bit depth が決まる | 対象外 |
 | 1 | indexed color | 後続版で追加予定 |
 | 4 | indexed color | 後続版で追加予定 |
-| 8 | indexed color | 後続版で追加予定 |
+| 8 | indexed color | native decode / encode 対象、generic decode は後続 |
 | 16 | true color | 後続版で追加予定 |
-| 24 | true color | 初期版の対象 |
+| 24 | true color | generic decode / encode 対象、native decode / encode 対象 |
 | 32 | true color | 後続版で追加予定 |
 
 上記以外の `biBitCount` は unsupported format として扱う。
@@ -278,14 +284,27 @@ generic `Image` への decode では画像データの解釈には使わない�
 color table は indexed color BMP の palette である。
 color table は pixel array の前に置かれる。
 
+8-bit indexed color BMP は native decode / encode 対象とする。
+generic decode では後続版で color table を使って `PixelFormat::Rgb8` に展開する。
+
+8-bit indexed color BMP の color table entry 数は次のように決める。
+
+- `biClrUsed == 0`: bit depth から決まる最大 entry 数を使う。8-bit では 256 entries。
+- `biClrUsed != 0`: `biClrUsed` entries を使う。
+
+`biClrUsed` が bit depth から決まる最大 entry 数より大きい場合は不正な header として扱う。
+
 color table entry は `RGBQUAD` として扱う。
-file 上の byte order は次の通りである。
+`RGBQUAD` は 4 byte の color table entry であり、file 上の byte order は次の通りである。
 
 ```text
 B G R reserved
 ```
 
-color table entry の `reserved` byte を alpha として扱うかは未定。
+`reserved` byte は BMP 仕様上 0 でなければならない。
+`decode_native` では `reserved` の値を native representation に保持する。
+`validate_file_layout` では `reserved == 0` を確認する。
+generic decode では `reserved` byte を alpha として扱わず、RGB のみを画像データに反映する。
 
 ## BITMAPV4HEADER / BITMAPV5HEADER
 
@@ -304,7 +323,8 @@ generic `Image` への decode output は未定部分がある。
 現時点の予定は次の通りである。
 
 - 24-bit `BI_RGB`: `Rgb8`
-- indexed color BMP: 未定
+- 8-bit indexed color BMP: native decode / encode 対象、generic decode は後続で `Rgb8` に展開する
+- 1-bit / 4-bit indexed color BMP: 後続版で検討
 - 16-bit true color BMP: 未定
 - 32-bit true color BMP: 未定
 - alpha 付き BMP: 未定
@@ -320,6 +340,9 @@ generic `Image` への decode output は未定部分がある。
 - `biBitCount == 24`
 - `biCompression == BI_RGB`
 - output は `PixelFormat::Rgb8`
+
+8-bit indexed color BMP は native decode / encode 対象だが、
+generic `Image` への decode は後続版で追加する。
 
 24-bit `BI_RGB` では、file 上の pixel は `B G R` の順に並ぶ。
 decode ではこれを `Rgb8` の `R G B` に変換する。
@@ -420,6 +443,10 @@ native representation で保持する対象は以下である。
 - color table
 - pixel array
 
+8-bit indexed color BMP の native representation では、
+`color_table` に `RGBQUAD` entries を保持し、
+`pixel_array` に index data と row padding を含む file 上の pixel array を保持する。
+
 BMP native representation は top-level native API にも追加し、
 `decode_native` / `encode_native` では `NativeImage::Bmp(BmpImage)` として扱う。
 `encode_native` は native representation の field をできるだけそのまま書き出す API であり、
@@ -432,6 +459,14 @@ generic encode のような正規化 API ではない。
 `bfOffBits`、`bfSize`、`biSizeImage`、pixel array length などの整合性を検査する。
 `BI_RGB` の `biSizeImage == 0` は BMP 仕様上許容されるため、
 `validate_file_layout` でも整合した layout として扱う。
+`validate_file_layout` では、現在対応している BMP 構造について次を確認する。
+
+- `bfOffBits == expected_min_pixel_offset`
+- `bfSize == bfOffBits + pixel_array.len()`
+- `BI_RGB` では、`biSizeImage == 0` または `biSizeImage == pixel_array.len()`
+- `pixel_array.len()` が row size と height から計算した必要量と一致する
+- color table entry の `reserved == 0`
+
 `decode_native` は unknown gap bytes を保持しないため、
 `decode_native` で得た `BmpImage` が常に `validate_file_layout` を通るとは限らない。
 
