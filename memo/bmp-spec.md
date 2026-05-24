@@ -49,7 +49,10 @@ BMP file の先頭には `BITMAPFILEHEADER` が置かれる。
 このクレートでは、初期版 / 後続版とも `bfType` は `BM` のみ扱う。
 
 `bfReserved1` と `bfReserved2` は仕様上 0 でなければならない。
-encode 時は常に 0 を書く。
+generic encode、または `ImageView + BmpEncodeOptions` から `BmpImage` を構築する場合は、
+このクレートが生成する BMP として常に 0 を設定する。
+`decode_native` では入力 file の値を native representation に保持する。
+`encode_native` では、native representation に保持された値を原則そのまま書く。
 decode 時に 0 以外だった場合でも、画像データの解釈には使わず無視する。
 
 `bfSize` は仕様上 BMP file 全体の byte size を表す。
@@ -63,6 +66,8 @@ decode 時は `bfOffBits` を pixel array の開始位置として使う。
 `bfOffBits` が `BITMAPFILEHEADER`、DIB header、color masks、color table など、
 pixel array より前に必要な領域の途中を指す場合は不正な header として扱う。
 `bfOffBits` が入力長を超える場合も不正な header として扱う。
+`bfOffBits` と pixel array の間に unknown gap bytes がある場合、
+generic decode ではその gap bytes を無視し、native representation にも保持しない。
 
 ## DIB header
 
@@ -195,6 +200,11 @@ color mask の有無と置き場所は `biCompression` で決まる。
 `biCompression` には、GDI の BMP file で使われる値のほか、
 Windows CE 由来の拡張、CMYK 系、video frame 用の FOURCC value などが存在する。
 このクレートでは、BMP image file として扱う範囲に絞る。
+初期版では `BI_RGB` 以外の compression は unsupported format として扱う。
+そのため、現時点では RLE compression と top-down BMP の組み合わせも、
+unsupported format として扱う。
+後続版で RLE を decode 対象に追加する時点で、
+RLE compression と top-down BMP の組み合わせを不正な header として扱う。
 
 `BI_RGB` の pixel array は非圧縮 raster data である。
 
@@ -230,6 +240,10 @@ RLE を encode 対象に含めるかは未定。
 decode 時は、pixel array の必要量を header 情報から計算する。
 `biSizeImage` が 0 または実際の必要量と一致しない場合でも、それだけでは不正とはしない。
 ただし、pixel array が必要量に満たない入力は不正な入力として扱う。
+generic encode、または `ImageView + BmpEncodeOptions` から `BmpImage` を構築する場合は、
+計算した pixel array size を `biSizeImage` に設定する。
+`encode_native` では、`BI_RGB` の `biSizeImage` が 0 または計算した pixel array size と一致する場合に許容する。
+それ以外の `biSizeImage` は不正な header として扱う。
 
 `biXPelsPerMeter` と `biYPelsPerMeter` は resolution metadata を表す。
 ここでの resolution は、画像の pixel 数ではなく、1 meter あたりの pixel 数で表す pixel density である。
@@ -380,7 +394,8 @@ row order は `BmpEncodeOptions` の orientation に従い、既定値は bottom
 - `biClrUsed`
 
 `biPlanes` は仕様上常に 1 を書く。
-`bfReserved1` と `bfReserved2` は常に 0 を書く。
+`ImageView + BmpEncodeOptions` から `BmpImage` を構築する場合、
+`biPlanes`、`bfReserved1`、`bfReserved2` は仕様上の既定値として 0 / 1 を設定する。
 
 ## native representation
 

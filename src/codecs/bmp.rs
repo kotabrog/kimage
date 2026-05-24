@@ -418,7 +418,7 @@ fn validate_native_bmp_image(image: &BmpImage) -> Result<()> {
         });
     }
 
-    if info_header.image_size != image_size_u32 {
+    if info_header.image_size != 0 && info_header.image_size != image_size_u32 {
         return Err(ImageError::InvalidHeader {
             reason: "invalid BMP image size",
         });
@@ -437,13 +437,7 @@ fn validate_bmp_image_pixels(image: &BmpImage) -> Result<()> {
 
     let width = info_header.width as u32;
     let height = info_header.height.unsigned_abs();
-    let pixel_offset = image.file_header.pixel_offset as usize;
     let image_size = bmp_pixel_array_len(width, height)?;
-    if image.file_header.pixel_offset != PIXEL_OFFSET || pixel_offset != PIXEL_OFFSET as usize {
-        return Err(ImageError::InvalidHeader {
-            reason: "invalid pixel data offset",
-        });
-    }
 
     if image.pixel_array.len() != image_size {
         return Err(ImageError::InvalidBufferLength {
@@ -616,6 +610,19 @@ mod tests {
     }
 
     #[test]
+    fn decode_uses_pixel_offset_after_unknown_gap() {
+        let input = two_by_two_bmp_with_pixel_gap();
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 2);
+        assert_eq!(
+            image.data,
+            [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255,]
+        );
+    }
+
+    #[test]
     fn decode_rejects_non_bmp_magic() {
         let mut input = two_by_two_bmp();
         input[0] = b'Z';
@@ -741,6 +748,32 @@ mod tests {
     }
 
     #[test]
+    fn encode_native_allows_zero_image_size_for_bi_rgb() {
+        let mut image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
+        let BmpDibHeader::BitmapInfoHeader(info_header) = &mut image.dib_header;
+        info_header.image_size = 0;
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(&output[34..38], &0_u32.to_le_bytes());
+        assert_eq!(decode(&mut Cursor::new(output)).unwrap().width, 2);
+    }
+
+    #[test]
+    fn encode_native_preserves_reserved_file_header_fields() {
+        let mut image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
+        image.file_header.reserved1 = 1;
+        image.file_header.reserved2 = 2;
+        let mut output = Vec::new();
+
+        encode_native(&mut output, &image).unwrap();
+
+        assert_eq!(&output[6..8], &1_u16.to_le_bytes());
+        assert_eq!(&output[8..10], &2_u16.to_le_bytes());
+    }
+
+    #[test]
     fn image_view_to_bmp_native_converts_rgb8_image() {
         let data = [255, 0, 0];
         let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
@@ -839,6 +872,14 @@ mod tests {
         data.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
         data.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
 
+        data
+    }
+
+    fn two_by_two_bmp_with_pixel_gap() -> Vec<u8> {
+        let mut data = two_by_two_bmp();
+        data[2..6].copy_from_slice(&72_u32.to_le_bytes());
+        data[10..14].copy_from_slice(&56_u32.to_le_bytes());
+        data.splice(54..54, [0xaa, 0xbb]);
         data
     }
 
