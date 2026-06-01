@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 
 use crate::io::{read_u16_le, read_u32_le, write_u16_le, write_u32_le};
@@ -13,7 +14,7 @@ const COMPRESSION_BI_RGB: u32 = 0;
 const COLOR_TABLE_ENTRY_SIZE: u32 = 4;
 
 /// Output options used when encoding a generic image view as BMP.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BmpEncodeOptions {
     pub pixel_encoding: BmpPixelEncoding,
     pub orientation: BmpOrientation,
@@ -45,6 +46,11 @@ impl BmpEncodeOptions {
         self.y_pixels_per_meter = y_pixels_per_meter;
         self
     }
+
+    pub fn with_pixel_encoding(mut self, pixel_encoding: BmpPixelEncoding) -> Self {
+        self.pixel_encoding = pixel_encoding;
+        self
+    }
 }
 
 impl Default for BmpEncodeOptions {
@@ -54,9 +60,13 @@ impl Default for BmpEncodeOptions {
 }
 
 /// Pixel array representation used when encoding BMP.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BmpPixelEncoding {
     Rgb24,
+    Indexed8 {
+        color_table: Vec<BmpColorTableEntry>,
+    },
+    AutoIndexed8OrRgb24,
 }
 
 /// BMP row order.
@@ -346,8 +356,20 @@ pub fn image_view_to_bmp_native(
     image: ImageView<'_>,
     options: BmpEncodeOptions,
 ) -> Result<BmpImage> {
-    match options.pixel_encoding {
+    match options.pixel_encoding.clone() {
         BmpPixelEncoding::Rgb24 => image_view_to_rgb24_bmp_native(image, options),
+        BmpPixelEncoding::Indexed8 { color_table } => {
+            image_view_to_indexed8_bmp_native(image, &options, &color_table)
+        }
+        BmpPixelEncoding::AutoIndexed8OrRgb24 => image_view_to_auto_indexed8_or_rgb24_bmp_native(
+            image,
+            BmpEncodeOptions {
+                pixel_encoding: BmpPixelEncoding::Rgb24,
+                orientation: options.orientation,
+                x_pixels_per_meter: options.x_pixels_per_meter,
+                y_pixels_per_meter: options.y_pixels_per_meter,
+            },
+        ),
     }
 }
 
@@ -355,54 +377,14 @@ fn image_view_to_rgb24_bmp_native(
     image: ImageView<'_>,
     options: BmpEncodeOptions,
 ) -> Result<BmpImage> {
-    if image.pixel_format != PixelFormat::Rgb8 {
-        return Err(ImageError::UnsupportedPixelFormat {
-            pixel_format: image.pixel_format,
-        });
-    }
-
-    if image.width == 0 || image.height == 0 {
-        return Err(ImageError::InvalidData {
-            reason: "width and height must be greater than zero",
-        });
-    }
-
-    let image = ImageView::new(
-        image.width,
-        image.height,
-        image.pixel_format,
-        image.stride,
-        image.data,
-    )?;
-    let width_i32 =
-        i32::try_from(image.width).map_err(|_| ImageError::ImageDimensionsTooLarge {
-            width: image.width,
-            height: image.height,
-            bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
-        })?;
-    let height_i32 =
-        i32::try_from(image.height).map_err(|_| ImageError::ImageDimensionsTooLarge {
-            width: image.width,
-            height: image.height,
-            bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
-        })?;
+    let image = validate_rgb8_encode_input(image)?;
+    let width_i32 = bmp_i32_dimension(image.width, image.width, image.height)?;
+    let height_i32 = bmp_i32_dimension(image.height, image.width, image.height)?;
 
     let row_size = bmp_row_size(image.width, BITS_PER_PIXEL_RGB24)?;
     let image_size = bmp_pixel_array_len(image.width, image.height, BITS_PER_PIXEL_RGB24)?;
-    let image_size_u32 =
-        u32::try_from(image_size).map_err(|_| ImageError::ImageDimensionsTooLarge {
-            width: image.width,
-            height: image.height,
-            bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
-        })?;
-    let file_size =
-        PIXEL_OFFSET
-            .checked_add(image_size_u32)
-            .ok_or(ImageError::ImageDimensionsTooLarge {
-                width: image.width,
-                height: image.height,
-                bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
-            })?;
+    let image_size_u32 = bmp_u32_image_size(image.width, image.height, image_size)?;
+    let file_size = bmp_file_size(PIXEL_OFFSET, image.width, image.height, image_size_u32)?;
     let row_len = rgb24_row_len(image.width)?;
     let padding_len = row_size - row_len;
     let padding = [0; 3];
@@ -451,6 +433,130 @@ fn image_view_to_rgb24_bmp_native(
     })
 }
 
+fn image_view_to_indexed8_bmp_native(
+    image: ImageView<'_>,
+    options: &BmpEncodeOptions,
+    color_table: &[BmpColorTableEntry],
+) -> Result<BmpImage> {
+    let image = validate_rgb8_encode_input(image)?;
+    validate_encode_color_table(color_table)?;
+
+    let width_i32 = bmp_i32_dimension(image.width, image.width, image.height)?;
+    let height_i32 = bmp_i32_dimension(image.height, image.width, image.height)?;
+    let row_size = bmp_row_size(image.width, BITS_PER_PIXEL_INDEXED8)?;
+    let image_size = bmp_pixel_array_len(image.width, image.height, BITS_PER_PIXEL_INDEXED8)?;
+    let image_size_u32 = bmp_u32_image_size(image.width, image.height, image_size)?;
+    let pixel_offset = expected_min_pixel_offset_for_color_table(color_table.len())?;
+    let file_size = bmp_file_size(pixel_offset, image.width, image.height, image_size_u32)?;
+    let padding_len = row_size - image.width as usize;
+    let padding = [0; 3];
+    let palette_indexes = palette_indexes(color_table);
+    let mut pixel_array = Vec::with_capacity(image_size);
+
+    match options.orientation {
+        BmpOrientation::BottomUp => {
+            for output_row in (0..image.height as usize).rev() {
+                write_indexed8_bmp_row(&mut pixel_array, image, output_row, &palette_indexes)?;
+                pixel_array.extend_from_slice(&padding[..padding_len]);
+            }
+        }
+        BmpOrientation::TopDown => {
+            for output_row in 0..image.height as usize {
+                write_indexed8_bmp_row(&mut pixel_array, image, output_row, &palette_indexes)?;
+                pixel_array.extend_from_slice(&padding[..padding_len]);
+            }
+        }
+    }
+
+    Ok(BmpImage {
+        file_header: BmpFileHeader {
+            file_size,
+            reserved1: 0,
+            reserved2: 0,
+            pixel_offset,
+        },
+        dib_header: BmpDibHeader::BitmapInfoHeader(BmpInfoHeader {
+            width: width_i32,
+            height: match options.orientation {
+                BmpOrientation::BottomUp => height_i32,
+                BmpOrientation::TopDown => -height_i32,
+            },
+            planes: PLANES,
+            bits_per_pixel: BITS_PER_PIXEL_INDEXED8,
+            compression: COMPRESSION_BI_RGB,
+            image_size: image_size_u32,
+            x_pixels_per_meter: options.x_pixels_per_meter,
+            y_pixels_per_meter: options.y_pixels_per_meter,
+            colors_used: color_table.len() as u32,
+            important_colors: 0,
+        }),
+        color_masks: Vec::new(),
+        color_table: color_table.to_vec(),
+        pixel_array,
+    })
+}
+
+fn image_view_to_auto_indexed8_or_rgb24_bmp_native(
+    image: ImageView<'_>,
+    rgb24_options: BmpEncodeOptions,
+) -> Result<BmpImage> {
+    let image = validate_rgb8_encode_input(image)?;
+    let color_table = auto_color_table(image)?;
+    if color_table.len() > 256 {
+        return image_view_to_rgb24_bmp_native(image, rgb24_options);
+    }
+
+    image_view_to_indexed8_bmp_native(image, &rgb24_options, &color_table)
+}
+
+fn validate_rgb8_encode_input(image: ImageView<'_>) -> Result<ImageView<'_>> {
+    if image.pixel_format != PixelFormat::Rgb8 {
+        return Err(ImageError::UnsupportedPixelFormat {
+            pixel_format: image.pixel_format,
+        });
+    }
+
+    if image.width == 0 || image.height == 0 {
+        return Err(ImageError::InvalidData {
+            reason: "width and height must be greater than zero",
+        });
+    }
+
+    ImageView::new(
+        image.width,
+        image.height,
+        image.pixel_format,
+        image.stride,
+        image.data,
+    )
+}
+
+fn bmp_i32_dimension(value: u32, width: u32, height: u32) -> Result<i32> {
+    i32::try_from(value).map_err(|_| ImageError::ImageDimensionsTooLarge {
+        width,
+        height,
+        bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
+    })
+}
+
+fn bmp_u32_image_size(width: u32, height: u32, image_size: usize) -> Result<u32> {
+    u32::try_from(image_size).map_err(|_| ImageError::ImageDimensionsTooLarge {
+        width,
+        height,
+        bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
+    })
+}
+
+fn bmp_file_size(pixel_offset: u32, width: u32, height: u32, image_size: u32) -> Result<u32> {
+    pixel_offset
+        .checked_add(image_size)
+        .ok_or(ImageError::ImageDimensionsTooLarge {
+            width,
+            height,
+            bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
+        })
+}
+
 fn write_rgb24_bmp_row<W: Write>(
     writer: &mut W,
     image: ImageView<'_>,
@@ -465,6 +571,91 @@ fn write_rgb24_bmp_row<W: Write>(
     }
 
     Ok(())
+}
+
+fn write_indexed8_bmp_row<W: Write>(
+    writer: &mut W,
+    image: ImageView<'_>,
+    row_index: usize,
+    palette_indexes: &HashMap<[u8; 3], u8>,
+) -> Result<()> {
+    let row_len = rgb24_row_len(image.width)?;
+    let row_start = row_index * image.stride;
+    let row = &image.data[row_start..row_start + row_len];
+
+    for pixel in row.chunks_exact(3) {
+        let rgb = [pixel[0], pixel[1], pixel[2]];
+        let index = palette_indexes.get(&rgb).ok_or(ImageError::InvalidData {
+            reason: "BMP palette does not contain input color",
+        })?;
+        writer.write_all(&[*index])?;
+    }
+
+    Ok(())
+}
+
+fn validate_encode_color_table(color_table: &[BmpColorTableEntry]) -> Result<()> {
+    if color_table.is_empty() || color_table.len() > 256 {
+        return Err(ImageError::InvalidData {
+            reason: "invalid BMP color table length",
+        });
+    }
+
+    if color_table.iter().any(|entry| entry.reserved != 0) {
+        return Err(ImageError::InvalidData {
+            reason: "invalid BMP color table reserved value",
+        });
+    }
+
+    Ok(())
+}
+
+fn palette_indexes(color_table: &[BmpColorTableEntry]) -> HashMap<[u8; 3], u8> {
+    let mut indexes = HashMap::with_capacity(color_table.len());
+    for (index, entry) in color_table.iter().enumerate() {
+        indexes
+            .entry([entry.red, entry.green, entry.blue])
+            .or_insert(index as u8);
+    }
+    indexes
+}
+
+fn auto_color_table(image: ImageView<'_>) -> Result<Vec<BmpColorTableEntry>> {
+    let mut indexes = HashMap::with_capacity(256);
+    let mut color_table = Vec::new();
+    let row_len = rgb24_row_len(image.width)?;
+
+    for row_index in 0..image.height as usize {
+        let row_start = row_index * image.stride;
+        let row = &image.data[row_start..row_start + row_len];
+
+        for pixel in row.chunks_exact(3) {
+            let rgb = [pixel[0], pixel[1], pixel[2]];
+            if indexes.contains_key(&rgb) {
+                continue;
+            }
+
+            if color_table.len() == 256 {
+                color_table.push(BmpColorTableEntry {
+                    red: pixel[0],
+                    green: pixel[1],
+                    blue: pixel[2],
+                    reserved: 0,
+                });
+                return Ok(color_table);
+            }
+
+            indexes.insert(rgb, color_table.len() as u8);
+            color_table.push(BmpColorTableEntry {
+                red: pixel[0],
+                green: pixel[1],
+                blue: pixel[2],
+                reserved: 0,
+            });
+        }
+    }
+
+    Ok(color_table)
 }
 
 fn validate_bmp_image_pixels(image: &BmpImage) -> Result<()> {
@@ -1147,6 +1338,20 @@ mod tests {
     }
 
     #[test]
+    fn encode_writes_8_bit_indexed_bmp_with_palette() {
+        let data = [0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 0];
+        let image = ImageView::new(2, 2, PixelFormat::Rgb8, 6, &data).unwrap();
+        let options = BmpEncodeOptions::new().with_pixel_encoding(BmpPixelEncoding::Indexed8 {
+            color_table: black_and_red_color_table(),
+        });
+        let mut output = Vec::new();
+
+        encode(&mut output, image, options).unwrap();
+
+        assert_eq!(output, two_by_two_indexed8_bmp());
+    }
+
+    #[test]
     fn encode_native_writes_bmp_image() {
         let image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
         let mut output = Vec::new();
@@ -1225,6 +1430,134 @@ mod tests {
         assert_eq!(native.file_header.file_size, 58);
         assert_eq!(native.file_header.pixel_offset, 54);
         assert_eq!(native.pixel_array, [0, 0, 255, 0]);
+    }
+
+    #[test]
+    fn image_view_to_bmp_native_converts_rgb8_image_to_indexed8_with_palette() {
+        let data = [0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 0];
+        let image = ImageView::new(2, 2, PixelFormat::Rgb8, 6, &data).unwrap();
+        let options = BmpEncodeOptions::new().with_pixel_encoding(BmpPixelEncoding::Indexed8 {
+            color_table: black_and_red_color_table(),
+        });
+
+        let native = image_view_to_bmp_native(image, options).unwrap();
+
+        assert_eq!(native.file_header.file_size, 70);
+        assert_eq!(native.file_header.pixel_offset, 62);
+        assert_eq!(
+            native.dib_header,
+            BmpDibHeader::BitmapInfoHeader(BmpInfoHeader {
+                width: 2,
+                height: 2,
+                planes: 1,
+                bits_per_pixel: 8,
+                compression: 0,
+                image_size: 8,
+                x_pixels_per_meter: 0,
+                y_pixels_per_meter: 0,
+                colors_used: 2,
+                important_colors: 0,
+            })
+        );
+        assert_eq!(native.color_table, black_and_red_color_table());
+        assert_eq!(native.pixel_array, [1, 0, 0, 0, 0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn image_view_to_bmp_native_rejects_indexed8_palette_without_input_color() {
+        let data = [0, 255, 0];
+        let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
+        let options = BmpEncodeOptions::new().with_pixel_encoding(BmpPixelEncoding::Indexed8 {
+            color_table: black_and_red_color_table(),
+        });
+
+        let error = image_view_to_bmp_native(image, options).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "BMP palette does not contain input color"
+            }
+        );
+    }
+
+    #[test]
+    fn image_view_to_bmp_native_rejects_empty_indexed8_palette() {
+        let data = [0, 0, 0];
+        let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
+        let options = BmpEncodeOptions::new().with_pixel_encoding(BmpPixelEncoding::Indexed8 {
+            color_table: Vec::new(),
+        });
+
+        let error = image_view_to_bmp_native(image, options).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "invalid BMP color table length"
+            }
+        );
+    }
+
+    #[test]
+    fn image_view_to_bmp_native_rejects_indexed8_palette_reserved_value() {
+        let data = [0, 0, 0];
+        let image = ImageView::new(1, 1, PixelFormat::Rgb8, 3, &data).unwrap();
+        let options = BmpEncodeOptions::new().with_pixel_encoding(BmpPixelEncoding::Indexed8 {
+            color_table: vec![BmpColorTableEntry {
+                blue: 0,
+                green: 0,
+                red: 0,
+                reserved: 1,
+            }],
+        });
+
+        let error = image_view_to_bmp_native(image, options).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "invalid BMP color table reserved value"
+            }
+        );
+    }
+
+    #[test]
+    fn image_view_to_bmp_native_auto_uses_indexed8_for_256_or_fewer_colors() {
+        let data = [0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 0];
+        let image = ImageView::new(2, 2, PixelFormat::Rgb8, 6, &data).unwrap();
+
+        let native = image_view_to_bmp_native(
+            image,
+            BmpEncodeOptions::new().with_pixel_encoding(BmpPixelEncoding::AutoIndexed8OrRgb24),
+        )
+        .unwrap();
+
+        let BmpDibHeader::BitmapInfoHeader(info_header) = native.dib_header;
+        assert_eq!(info_header.bits_per_pixel, 8);
+        assert_eq!(info_header.colors_used, 2);
+        assert_eq!(native.color_table, black_and_red_color_table());
+        assert_eq!(native.pixel_array, [1, 0, 0, 0, 0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn image_view_to_bmp_native_auto_uses_rgb24_for_more_than_256_colors() {
+        let mut data = Vec::new();
+        for value in 0..257_u32 {
+            data.extend_from_slice(&[(value & 0xff) as u8, (value >> 8) as u8, 0]);
+        }
+        let image = ImageView::new(257, 1, PixelFormat::Rgb8, 257 * 3, &data).unwrap();
+
+        let native = image_view_to_bmp_native(
+            image,
+            BmpEncodeOptions::new().with_pixel_encoding(BmpPixelEncoding::AutoIndexed8OrRgb24),
+        )
+        .unwrap();
+
+        let BmpDibHeader::BitmapInfoHeader(info_header) = native.dib_header;
+        assert_eq!(info_header.bits_per_pixel, 24);
+        assert_eq!(info_header.colors_used, 0);
+        assert!(native.color_table.is_empty());
     }
 
     #[test]
@@ -1330,6 +1663,23 @@ mod tests {
 
     fn two_by_two_indexed8_bmp_with_256_colors() -> Vec<u8> {
         two_by_two_indexed8_bmp_with_color_table(256)
+    }
+
+    fn black_and_red_color_table() -> Vec<BmpColorTableEntry> {
+        vec![
+            BmpColorTableEntry {
+                blue: 0,
+                green: 0,
+                red: 0,
+                reserved: 0,
+            },
+            BmpColorTableEntry {
+                blue: 0,
+                green: 0,
+                red: 255,
+                reserved: 0,
+            },
+        ]
     }
 
     fn two_by_two_indexed8_bmp_with_color_table(color_count: usize) -> Vec<u8> {

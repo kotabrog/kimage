@@ -383,8 +383,7 @@ BMP は pixel encoding、orientation、resolution metadata など複数の設定
 BMP は `EncodeFormat::Bmp(BmpEncodeOptions)` とし、
 top-level `encode` は `BmpEncodeOptions` を `bmp::encode` に渡す。
 
-初期版の generic encode は、`PixelFormat::Rgb8` の `ImageView` を、
-24-bit `BI_RGB` の `BITMAPINFOHEADER` BMP として出力する。
+generic encode は、`PixelFormat::Rgb8` の `ImageView` を対象にする。
 row order は `BmpEncodeOptions` の orientation に従い、既定値は bottom-up とする。
 
 初期版の `BmpEncodeOptions` は、次の設定を持つ。
@@ -396,22 +395,45 @@ row order は `BmpEncodeOptions` の orientation に従い、既定値は bottom
 | `biXPelsPerMeter` | horizontal resolution metadata | 0 |
 | `biYPelsPerMeter` | vertical resolution metadata | 0 |
 
-初期版の pixel encoding は `Rgb24` のみを持つ。
-`Rgb24` は `PixelFormat::Rgb8` の `ImageView` だけを受け付け、
+pixel encoding は次を持つ。
+
+- `Rgb24`
+- `Indexed8 { color_table }`
+- `AutoIndexed8OrRgb24`
+
+`Rgb24` は `PixelFormat::Rgb8` の `ImageView` を受け付け、
 24-bit `BI_RGB` の `BITMAPINFOHEADER` BMP を生成する。
+color table は持たず、`biBitCount == 24`、`biClrUsed == 0`、
+`bfOffBits == 14 + 40` とする。
+
+`Indexed8 { color_table }` は、指定された color table を使って
+8-bit indexed `BI_RGB` の `BITMAPINFOHEADER` BMP を生成する。
+`color_table.len()` は `1..=256` とし、各 `RGBQUAD` entry の `reserved` は 0 でなければならない。
+入力画像の各 RGB 値は color table 内の RGB 値と完全一致する必要がある。
+一致する entry がない場合は encode error とし、近似色への変換や量子化はしない。
+同じ RGB 値が color table に複数ある場合は、最初の entry を使う。
+`biBitCount == 8`、`biClrUsed == color_table.len()`、
+`bfOffBits == 14 + 40 + color_table.len() * 4` とする。
+pixel array は palette index byte と row padding を含む。
+
+`AutoIndexed8OrRgb24` は、入力画像を可逆に 8-bit indexed BMP で表現できる場合だけ
+8-bit indexed BMP を生成し、できない場合は 24-bit BMP に fallback する。
+入力画像内の unique RGB 色が 256 色以下なら、画像走査順に初出の色を追加した
+deterministic な color table を生成し、8-bit indexed BMP を出力する。
+unique RGB 色が 257 色以上なら `Rgb24` と同じ 24-bit BMP を出力する。
+この mode では量子化、dithering、近似色変換は行わないため、常に可逆変換である。
+生成する color table entry の `reserved` は常に 0 とする。
 
 利用側の記述を簡単にするため、必要に応じて `BmpEncodeOptions::new()` と
-`with_orientation` / `with_resolution` のような builder-style method を追加する。
+`with_pixel_encoding` / `with_orientation` / `with_resolution` のような builder-style method を追加する。
 ただし、基本形は `Default` と struct update syntax で表現できるようにする。
 
 後続版で option として追加する候補は次の通りである。
 
-- `Rgb8`: encode 対象
 - `Rgba8`
 - `Gray8`
 - `Gray16` / `Rgb16` / `Rgba16` / gray alpha formats
-- indexed color encode
-- custom color table
+- lossy indexed color quantization
 - 16-bit / 32-bit `BI_BITFIELDS`
 - `BITMAPV4HEADER` / `BITMAPV5HEADER`
 - color space metadata

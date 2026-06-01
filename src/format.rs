@@ -40,7 +40,7 @@ pub enum NativeImage {
 }
 
 /// Output format used when encoding a generic image view.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EncodeFormat {
     #[cfg(feature = "netpbm")]
     Pnm(pnm::PnmEncodeFormat),
