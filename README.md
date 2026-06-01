@@ -112,6 +112,7 @@ Unsupported:
 Supported:
 
 - uncompressed 24-bit bottom-up and top-down BMP
+- generic decode for uncompressed 8-bit indexed BMP
 - native decode and encode for uncompressed 8-bit indexed BMP
 - `BITMAPINFOHEADER`
 - native BMP APIs that preserve BMP header fields and pixel array data
@@ -126,7 +127,7 @@ Notes:
 
 Unsupported:
 
-- generic decode for palette BMP
+- generic decode for 1-bit and 4-bit palette BMP
 - compressed BMP
 - generic encode for palette BMP
 - BMP bit depths other than 8-bit indexed native BMP and 24-bit RGB BMP

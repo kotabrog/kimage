@@ -12,7 +12,7 @@
 
 - 初期版の generic decode / encode は `BITMAPINFOHEADER` を対象にする。
 - generic decode / encode の bit depth は 24-bit `BI_RGB` を対象にする。
-- native decode / encode は 8-bit indexed `BI_RGB` も対象にする。
+- generic decode と native decode / encode は 8-bit indexed `BI_RGB` も対象にする。
 - bottom-up / top-down BMP を扱う。
 - generic decode の出力は `PixelFormat::Rgb8` とする。
 - BMP encode は `ImageView` と `BmpEncodeOptions` から `BmpImage` を構築し、その native representation を file bytes に書き出す。
@@ -65,9 +65,7 @@
 
 ### 4. 8-bit indexed color BMP の generic decode
 
-- color table を使って `PixelFormat::Rgb8` に展開する。
-- `biClrUsed == 0` と非 0 の color table entry 数を扱う。
-- pixel index が color table の範囲外を参照する場合は不正な raster として扱う。
+- 実装済み。
 
 ### 5. 1-bit / 4-bit indexed color BMP decode
 

@@ -241,31 +241,51 @@ impl BmpImage {
         validate_supported_generic_info_header(info_header)?;
         validate_bmp_image_pixels(self)?;
 
+        match info_header.bits_per_pixel {
+            BITS_PER_PIXEL_RGB24 => self.to_rgb24_image(info_header),
+            BITS_PER_PIXEL_INDEXED8 => self.to_indexed8_image(info_header),
+            _ => Err(ImageError::UnsupportedFormat),
+        }
+    }
+
+    fn to_rgb24_image(&self, info_header: &BmpInfoHeader) -> Result<Image> {
         let width = info_header.width as u32;
         let height = info_header.height.unsigned_abs();
         let row_size = bmp_row_size(width, info_header.bits_per_pixel)?;
         let row_len = rgb24_row_len(width)?;
-        let mut pixels = Vec::with_capacity(
-            (width as usize)
-                .checked_mul(height as usize)
-                .and_then(|pixels| pixels.checked_mul(PixelFormat::Rgb8.bytes_per_pixel()))
-                .ok_or(ImageError::ImageDimensionsTooLarge {
-                    width,
-                    height,
-                    bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
-                })?,
-        );
+        let mut pixels = rgb8_output_buffer(width, height)?;
 
         for output_row in 0..height as usize {
-            let bmp_row = match bmp_orientation(info_header.height)? {
-                BmpOrientation::BottomUp => height as usize - 1 - output_row,
-                BmpOrientation::TopDown => output_row,
-            };
-            let row_start = bmp_row * row_size;
+            let row_start = bmp_row_start(info_header.height, row_size, output_row)?;
             let row = &self.pixel_array[row_start..row_start + row_len];
 
             for pixel in row.chunks_exact(3) {
                 pixels.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
+            }
+        }
+
+        Image::new(width, height, PixelFormat::Rgb8, pixels)
+    }
+
+    fn to_indexed8_image(&self, info_header: &BmpInfoHeader) -> Result<Image> {
+        let width = info_header.width as u32;
+        let height = info_header.height.unsigned_abs();
+        let row_size = bmp_row_size(width, info_header.bits_per_pixel)?;
+        let row_len = width as usize;
+        let mut pixels = rgb8_output_buffer(width, height)?;
+
+        for output_row in 0..height as usize {
+            let row_start = bmp_row_start(info_header.height, row_size, output_row)?;
+            let row = &self.pixel_array[row_start..row_start + row_len];
+
+            for index in row {
+                let entry =
+                    self.color_table
+                        .get(*index as usize)
+                        .ok_or(ImageError::InvalidData {
+                            reason: "BMP color index out of range",
+                        })?;
+                pixels.extend_from_slice(&[entry.red, entry.green, entry.blue]);
             }
         }
 
@@ -490,15 +510,11 @@ fn expected_min_pixel_offset(image: &BmpImage) -> Result<u32> {
 fn validate_supported_generic_info_header(info_header: &BmpInfoHeader) -> Result<()> {
     validate_supported_info_header_shape(info_header)?;
 
-    if info_header.bits_per_pixel != BITS_PER_PIXEL_RGB24 {
-        return Err(ImageError::UnsupportedFormat);
+    match (info_header.bits_per_pixel, info_header.compression) {
+        (BITS_PER_PIXEL_INDEXED8 | BITS_PER_PIXEL_RGB24, COMPRESSION_BI_RGB) => Ok(()),
+        (_, COMPRESSION_BI_RGB) => Err(ImageError::UnsupportedFormat),
+        _ => Err(ImageError::UnsupportedFormat),
     }
-
-    if info_header.compression != COMPRESSION_BI_RGB {
-        return Err(ImageError::UnsupportedFormat);
-    }
-
-    Ok(())
 }
 
 fn validate_supported_native_info_header(info_header: &BmpInfoHeader) -> Result<()> {
@@ -619,6 +635,35 @@ fn validate_color_table_layout(color_table: &[BmpColorTableEntry]) -> Result<()>
     Ok(())
 }
 
+fn rgb8_output_buffer(width: u32, height: u32) -> Result<Vec<u8>> {
+    let len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(PixelFormat::Rgb8.bytes_per_pixel()))
+        .ok_or(ImageError::ImageDimensionsTooLarge {
+            width,
+            height,
+            bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
+        })?;
+
+    Ok(Vec::with_capacity(len))
+}
+
+fn bmp_row_start(height: i32, row_size: usize, output_row: usize) -> Result<usize> {
+    let height_abs = height.unsigned_abs() as usize;
+    let bmp_row = match bmp_orientation(height)? {
+        BmpOrientation::BottomUp => height_abs - 1 - output_row,
+        BmpOrientation::TopDown => output_row,
+    };
+
+    bmp_row
+        .checked_mul(row_size)
+        .ok_or(ImageError::ImageDimensionsTooLarge {
+            width: 1,
+            height: height.unsigned_abs(),
+            bytes_per_pixel: PixelFormat::Rgb8.bytes_per_pixel(),
+        })
+}
+
 fn expected_min_pixel_offset_for_color_table(entry_count: usize) -> Result<u32> {
     let table_bytes = u32::try_from(entry_count)
         .ok()
@@ -722,6 +767,26 @@ mod tests {
             image.data,
             [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255,]
         );
+    }
+
+    #[test]
+    fn decode_reads_8_bit_indexed_bmp_image() {
+        let image = decode(&mut Cursor::new(two_by_two_indexed8_bmp())).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 2);
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn decode_reads_8_bit_indexed_top_down_bmp_image() {
+        let image = decode(&mut Cursor::new(two_by_two_indexed8_top_down_bmp())).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 2);
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0]);
     }
 
     #[test]
@@ -956,10 +1021,26 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_8_bit_indexed_bmp_for_generic_conversion() {
-        let error = decode(&mut Cursor::new(two_by_two_indexed8_bmp())).unwrap_err();
+    fn decode_rejects_8_bit_color_index_out_of_range() {
+        let mut input = two_by_two_indexed8_bmp();
+        input[62] = 2;
+        let error = decode(&mut Cursor::new(input)).unwrap_err();
 
-        assert_eq!(error, ImageError::UnsupportedFormat);
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "BMP color index out of range"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_ignores_8_bit_color_table_reserved_byte() {
+        let mut input = two_by_two_indexed8_bmp();
+        input[57] = 1;
+        let image = decode(&mut Cursor::new(input)).unwrap();
+
+        assert_eq!(image.data, [0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -1238,6 +1319,13 @@ mod tests {
 
     fn two_by_two_indexed8_bmp() -> Vec<u8> {
         two_by_two_indexed8_bmp_with_color_table(2)
+    }
+
+    fn two_by_two_indexed8_top_down_bmp() -> Vec<u8> {
+        let mut data = two_by_two_indexed8_bmp();
+        data[22..26].copy_from_slice(&(-2_i32).to_le_bytes());
+        data[62..70].copy_from_slice(&[1, 0, 0, 0, 0, 1, 0, 0]);
+        data
     }
 
     fn two_by_two_indexed8_bmp_with_256_colors() -> Vec<u8> {

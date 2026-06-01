@@ -167,7 +167,7 @@ BMP の DIB header では仕様上 1 でなければならない。
 | 0 | encoded image format 側で bit depth が決まる | 対象外 |
 | 1 | indexed color | 後続版で追加予定 |
 | 4 | indexed color | 後続版で追加予定 |
-| 8 | indexed color | native decode / encode 対象、generic decode は後続 |
+| 8 | indexed color | generic decode 対象、native decode / encode 対象 |
 | 16 | true color | 後続版で追加予定 |
 | 24 | true color | generic decode / encode 対象、native decode / encode 対象 |
 | 32 | true color | 後続版で追加予定 |
@@ -284,8 +284,8 @@ generic `Image` への decode では画像データの解釈には使わない�
 color table は indexed color BMP の palette である。
 color table は pixel array の前に置かれる。
 
-8-bit indexed color BMP は native decode / encode 対象とする。
-generic decode では後続版で color table を使って `PixelFormat::Rgb8` に展開する。
+8-bit indexed color BMP は generic decode 対象、native decode / encode 対象とする。
+generic decode では color table を使って `PixelFormat::Rgb8` に展開する。
 
 8-bit indexed color BMP の color table entry 数は次のように決める。
 
@@ -323,7 +323,7 @@ generic `Image` への decode output は未定部分がある。
 現時点の予定は次の通りである。
 
 - 24-bit `BI_RGB`: `Rgb8`
-- 8-bit indexed color BMP: native decode / encode 対象、generic decode は後続で `Rgb8` に展開する
+- 8-bit indexed color BMP: color table を使って `Rgb8` に展開する
 - 1-bit / 4-bit indexed color BMP: 後続版で検討
 - 16-bit true color BMP: 未定
 - 32-bit true color BMP: 未定
@@ -341,8 +341,9 @@ generic `Image` への decode output は未定部分がある。
 - `biCompression == BI_RGB`
 - output は `PixelFormat::Rgb8`
 
-8-bit indexed color BMP は native decode / encode 対象だが、
-generic `Image` への decode は後続版で追加する。
+8-bit indexed color BMP では、color table の `RGBQUAD` entries を使って
+`PixelFormat::Rgb8` に展開する。
+color table entry の `reserved` byte は alpha として扱わず、画像データに反映しない。
 
 24-bit `BI_RGB` では、file 上の pixel は `B G R` の順に並ぶ。
 decode ではこれを `Rgb8` の `R G B` に変換する。
