@@ -11,8 +11,10 @@
 現行の実装方針:
 
 - 初期版の generic decode / encode は `BITMAPINFOHEADER` を対象にする。
-- generic decode / encode の bit depth は 24-bit `BI_RGB` を対象にする。
-- generic decode と native decode / encode は 8-bit indexed `BI_RGB` も対象にする。
+- generic decode の bit depth は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
+- generic encode の bit depth は 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
+- native decode は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
+- native encode は 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
 - generic encode は、明示 color table による 8-bit indexed encode と、
   256 色以下なら 8-bit indexed、257 色以上なら 24-bit に fallback する auto mode を持つ。
 - bottom-up / top-down BMP を扱う。
@@ -39,7 +41,8 @@
 - `bmp::decode_native`
 - `bmp::encode_native`
 - `BmpImage::validate_file_layout`
-- 8-bit indexed BMP の native decode / encode
+- 1-bit / 4-bit indexed BMP の generic decode / native decode
+- 8-bit indexed BMP の generic decode / encode、native decode / encode
 - `image_view_to_bmp_native`
 - `NativeImage::Bmp(BmpImage)`
 - `EncodeFormat::Bmp(BmpEncodeOptions)`
@@ -71,9 +74,7 @@
 
 ### 5. 1-bit / 4-bit indexed color BMP decode
 
-- packed pixel index の読み取りを追加する。
-- color table を使って `PixelFormat::Rgb8` に展開する。
-- 既存の PBM bit packing 実装を参考にし、row padding の扱いを BMP 仕様に合わせる。
+- 実装済み。
 
 ### 6. 16-bit / 32-bit `BI_BITFIELDS`
 

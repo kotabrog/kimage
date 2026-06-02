@@ -8,6 +8,8 @@ const FILE_HEADER_SIZE: u32 = 14;
 const INFO_HEADER_SIZE: u32 = 40;
 const PIXEL_OFFSET: u32 = FILE_HEADER_SIZE + INFO_HEADER_SIZE;
 const PLANES: u16 = 1;
+const BITS_PER_PIXEL_INDEXED1: u16 = 1;
+const BITS_PER_PIXEL_INDEXED4: u16 = 4;
 const BITS_PER_PIXEL_INDEXED8: u16 = 8;
 const BITS_PER_PIXEL_RGB24: u16 = 24;
 const COMPRESSION_BI_RGB: u32 = 0;
@@ -125,7 +127,7 @@ pub struct BmpColorTableEntry {
     pub reserved: u8,
 }
 
-/// Decodes an uncompressed 24-bit BMP image.
+/// Decodes an uncompressed BMP image.
 pub fn decode<R: Read>(reader: &mut R) -> Result<Image> {
     decode_native(reader)?.to_image()
 }
@@ -253,7 +255,9 @@ impl BmpImage {
 
         match info_header.bits_per_pixel {
             BITS_PER_PIXEL_RGB24 => self.to_rgb24_image(info_header),
-            BITS_PER_PIXEL_INDEXED8 => self.to_indexed8_image(info_header),
+            BITS_PER_PIXEL_INDEXED1 | BITS_PER_PIXEL_INDEXED4 | BITS_PER_PIXEL_INDEXED8 => {
+                self.to_indexed_image(info_header)
+            }
             _ => Err(ImageError::UnsupportedFormat),
         }
     }
@@ -277,21 +281,21 @@ impl BmpImage {
         Image::new(width, height, PixelFormat::Rgb8, pixels)
     }
 
-    fn to_indexed8_image(&self, info_header: &BmpInfoHeader) -> Result<Image> {
+    fn to_indexed_image(&self, info_header: &BmpInfoHeader) -> Result<Image> {
         let width = info_header.width as u32;
         let height = info_header.height.unsigned_abs();
         let row_size = bmp_row_size(width, info_header.bits_per_pixel)?;
-        let row_len = width as usize;
         let mut pixels = rgb8_output_buffer(width, height)?;
 
         for output_row in 0..height as usize {
             let row_start = bmp_row_start(info_header.height, row_size, output_row)?;
-            let row = &self.pixel_array[row_start..row_start + row_len];
+            let row = &self.pixel_array[row_start..row_start + row_size];
 
-            for index in row {
+            for x in 0..width as usize {
+                let index = indexed_pixel(row, x, info_header.bits_per_pixel)?;
                 let entry =
                     self.color_table
-                        .get(*index as usize)
+                        .get(index as usize)
                         .ok_or(ImageError::InvalidData {
                             reason: "BMP color index out of range",
                         })?;
@@ -594,6 +598,25 @@ fn write_indexed8_bmp_row<W: Write>(
     Ok(())
 }
 
+fn indexed_pixel(row: &[u8], x: usize, bits_per_pixel: u16) -> Result<u8> {
+    match bits_per_pixel {
+        BITS_PER_PIXEL_INDEXED1 => {
+            let byte = row[x / 8];
+            Ok((byte >> (7 - x % 8)) & 0x01)
+        }
+        BITS_PER_PIXEL_INDEXED4 => {
+            let byte = row[x / 2];
+            if x & 1 == 0 {
+                Ok(byte >> 4)
+            } else {
+                Ok(byte & 0x0f)
+            }
+        }
+        BITS_PER_PIXEL_INDEXED8 => Ok(row[x]),
+        _ => Err(ImageError::UnsupportedFormat),
+    }
+}
+
 fn validate_encode_color_table(color_table: &[BmpColorTableEntry]) -> Result<()> {
     if color_table.is_empty() || color_table.len() > 256 {
         return Err(ImageError::InvalidData {
@@ -702,7 +725,13 @@ fn validate_supported_generic_info_header(info_header: &BmpInfoHeader) -> Result
     validate_supported_info_header_shape(info_header)?;
 
     match (info_header.bits_per_pixel, info_header.compression) {
-        (BITS_PER_PIXEL_INDEXED8 | BITS_PER_PIXEL_RGB24, COMPRESSION_BI_RGB) => Ok(()),
+        (
+            BITS_PER_PIXEL_INDEXED1
+            | BITS_PER_PIXEL_INDEXED4
+            | BITS_PER_PIXEL_INDEXED8
+            | BITS_PER_PIXEL_RGB24,
+            COMPRESSION_BI_RGB,
+        ) => Ok(()),
         (_, COMPRESSION_BI_RGB) => Err(ImageError::UnsupportedFormat),
         _ => Err(ImageError::UnsupportedFormat),
     }
@@ -712,7 +741,13 @@ fn validate_supported_native_info_header(info_header: &BmpInfoHeader) -> Result<
     validate_supported_info_header_shape(info_header)?;
 
     match (info_header.bits_per_pixel, info_header.compression) {
-        (BITS_PER_PIXEL_INDEXED8 | BITS_PER_PIXEL_RGB24, COMPRESSION_BI_RGB) => Ok(()),
+        (
+            BITS_PER_PIXEL_INDEXED1
+            | BITS_PER_PIXEL_INDEXED4
+            | BITS_PER_PIXEL_INDEXED8
+            | BITS_PER_PIXEL_RGB24,
+            COMPRESSION_BI_RGB,
+        ) => Ok(()),
         (_, COMPRESSION_BI_RGB) => Err(ImageError::UnsupportedFormat),
         _ => Err(ImageError::UnsupportedFormat),
     }
@@ -749,11 +784,10 @@ fn validate_pixel_offset(
 }
 
 fn color_table_entry_count(info_header: &BmpInfoHeader) -> Result<usize> {
-    if info_header.bits_per_pixel != BITS_PER_PIXEL_INDEXED8 {
-        return Ok(0);
-    }
-
-    let max_entries = 1_usize << BITS_PER_PIXEL_INDEXED8;
+    let max_entries = match max_color_table_entries(info_header.bits_per_pixel) {
+        Some(max_entries) => max_entries,
+        None => return Ok(0),
+    };
     if info_header.colors_used == 0 {
         return Ok(max_entries);
     }
@@ -769,6 +803,15 @@ fn color_table_entry_count(info_header: &BmpInfoHeader) -> Result<usize> {
     }
 
     Ok(colors_used)
+}
+
+fn max_color_table_entries(bits_per_pixel: u16) -> Option<usize> {
+    match bits_per_pixel {
+        BITS_PER_PIXEL_INDEXED1 | BITS_PER_PIXEL_INDEXED4 | BITS_PER_PIXEL_INDEXED8 => {
+            Some(1_usize << bits_per_pixel)
+        }
+        _ => None,
+    }
 }
 
 fn read_color_table(data: &[u8], entry_count: usize) -> Result<Vec<BmpColorTableEntry>> {
@@ -961,6 +1004,46 @@ mod tests {
     }
 
     #[test]
+    fn decode_reads_1_bit_indexed_bmp_image() {
+        let image = decode(&mut Cursor::new(two_by_two_indexed1_bmp())).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 2);
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn decode_reads_1_bit_indexed_top_down_bmp_image() {
+        let image = decode(&mut Cursor::new(two_by_two_indexed1_top_down_bmp())).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 2);
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0]);
+    }
+
+    #[test]
+    fn decode_reads_4_bit_indexed_bmp_image() {
+        let image = decode(&mut Cursor::new(two_by_two_indexed4_bmp())).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 2);
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn decode_reads_4_bit_indexed_top_down_bmp_image() {
+        let image = decode(&mut Cursor::new(two_by_two_indexed4_top_down_bmp())).unwrap();
+
+        assert_eq!(image.width, 2);
+        assert_eq!(image.height, 2);
+        assert_eq!(image.pixel_format, PixelFormat::Rgb8);
+        assert_eq!(image.data, [255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0]);
+    }
+
+    #[test]
     fn decode_reads_8_bit_indexed_bmp_image() {
         let image = decode(&mut Cursor::new(two_by_two_indexed8_bmp())).unwrap();
 
@@ -1009,6 +1092,70 @@ mod tests {
             })
         );
         assert_eq!(image.pixel_array.len(), 16);
+    }
+
+    #[test]
+    fn decode_native_reads_1_bit_indexed_bmp() {
+        let image = decode_native(&mut Cursor::new(two_by_two_indexed1_bmp())).unwrap();
+
+        assert_eq!(
+            image.file_header,
+            BmpFileHeader {
+                file_size: 70,
+                reserved1: 0,
+                reserved2: 0,
+                pixel_offset: 62,
+            }
+        );
+        assert_eq!(
+            image.dib_header,
+            BmpDibHeader::BitmapInfoHeader(BmpInfoHeader {
+                width: 2,
+                height: 2,
+                planes: 1,
+                bits_per_pixel: 1,
+                compression: 0,
+                image_size: 8,
+                x_pixels_per_meter: 0,
+                y_pixels_per_meter: 0,
+                colors_used: 0,
+                important_colors: 0,
+            })
+        );
+        assert_eq!(image.color_table, black_and_red_color_table());
+        assert_eq!(image.pixel_array, [0x80, 0, 0, 0, 0x40, 0, 0, 0]);
+    }
+
+    #[test]
+    fn decode_native_reads_4_bit_indexed_bmp() {
+        let image = decode_native(&mut Cursor::new(two_by_two_indexed4_bmp())).unwrap();
+
+        assert_eq!(
+            image.file_header,
+            BmpFileHeader {
+                file_size: 70,
+                reserved1: 0,
+                reserved2: 0,
+                pixel_offset: 62,
+            }
+        );
+        assert_eq!(
+            image.dib_header,
+            BmpDibHeader::BitmapInfoHeader(BmpInfoHeader {
+                width: 2,
+                height: 2,
+                planes: 1,
+                bits_per_pixel: 4,
+                compression: 0,
+                image_size: 8,
+                x_pixels_per_meter: 0,
+                y_pixels_per_meter: 0,
+                colors_used: 2,
+                important_colors: 0,
+            })
+        );
+        assert_eq!(image.color_table, black_and_red_color_table());
+        assert_eq!(image.pixel_array, [0x10, 0, 0, 0, 0x01, 0, 0, 0]);
     }
 
     #[test]
@@ -1069,6 +1216,28 @@ mod tests {
     }
 
     #[test]
+    fn decode_native_uses_default_color_table_len_for_1_bit_bmp() {
+        let image = decode_native(&mut Cursor::new(two_by_two_indexed1_bmp_with_color_table(
+            2,
+        )))
+        .unwrap();
+
+        assert_eq!(image.color_table.len(), 2);
+        assert_eq!(image.file_header.pixel_offset, 62);
+    }
+
+    #[test]
+    fn decode_native_uses_default_color_table_len_for_4_bit_bmp() {
+        let image = decode_native(&mut Cursor::new(two_by_two_indexed4_bmp_with_color_table(
+            16,
+        )))
+        .unwrap();
+
+        assert_eq!(image.color_table.len(), 16);
+        assert_eq!(image.file_header.pixel_offset, 118);
+    }
+
+    #[test]
     fn validate_file_layout_accepts_consistent_bmp_image() {
         let image = decode_native(&mut Cursor::new(two_by_two_bmp())).unwrap();
 
@@ -1078,6 +1247,20 @@ mod tests {
     #[test]
     fn validate_file_layout_accepts_consistent_8_bit_indexed_bmp() {
         let image = decode_native(&mut Cursor::new(two_by_two_indexed8_bmp())).unwrap();
+
+        image.validate_file_layout().unwrap();
+    }
+
+    #[test]
+    fn validate_file_layout_accepts_consistent_1_bit_indexed_bmp() {
+        let image = decode_native(&mut Cursor::new(two_by_two_indexed1_bmp())).unwrap();
+
+        image.validate_file_layout().unwrap();
+    }
+
+    #[test]
+    fn validate_file_layout_accepts_consistent_4_bit_indexed_bmp() {
+        let image = decode_native(&mut Cursor::new(two_by_two_indexed4_bmp())).unwrap();
 
         image.validate_file_layout().unwrap();
     }
@@ -1226,6 +1409,32 @@ mod tests {
     }
 
     #[test]
+    fn decode_rejects_1_bit_color_index_out_of_range() {
+        let input = two_by_two_indexed1_bmp_with_color_table(1);
+        let error = decode(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "BMP color index out of range"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_rejects_4_bit_color_index_out_of_range() {
+        let input = two_by_two_indexed4_bmp_with_color_table(1);
+        let error = decode(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidData {
+                reason: "BMP color index out of range"
+            }
+        );
+    }
+
+    #[test]
     fn decode_ignores_8_bit_color_table_reserved_byte() {
         let mut input = two_by_two_indexed8_bmp();
         input[57] = 1;
@@ -1238,6 +1447,34 @@ mod tests {
     fn decode_native_rejects_8_bit_color_table_larger_than_max() {
         let mut input = two_by_two_indexed8_bmp();
         input[46..50].copy_from_slice(&257_u32.to_le_bytes());
+        let error = decode_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "invalid BMP color table length"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_native_rejects_1_bit_color_table_larger_than_max() {
+        let mut input = two_by_two_indexed1_bmp();
+        input[46..50].copy_from_slice(&3_u32.to_le_bytes());
+        let error = decode_native(&mut Cursor::new(input)).unwrap_err();
+
+        assert_eq!(
+            error,
+            ImageError::InvalidHeader {
+                reason: "invalid BMP color table length"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_native_rejects_4_bit_color_table_larger_than_max() {
+        let mut input = two_by_two_indexed4_bmp();
+        input[46..50].copy_from_slice(&17_u32.to_le_bytes());
         let error = decode_native(&mut Cursor::new(input)).unwrap_err();
 
         assert_eq!(
@@ -1650,6 +1887,48 @@ mod tests {
         data
     }
 
+    fn two_by_two_indexed1_bmp() -> Vec<u8> {
+        two_by_two_indexed_bmp_with_color_table(
+            BITS_PER_PIXEL_INDEXED1,
+            2,
+            &[0x80, 0, 0, 0, 0x40, 0, 0, 0],
+        )
+    }
+
+    fn two_by_two_indexed1_top_down_bmp() -> Vec<u8> {
+        let mut data = two_by_two_indexed1_bmp();
+        data[22..26].copy_from_slice(&(-2_i32).to_le_bytes());
+        data[62..70].copy_from_slice(&[0x80, 0, 0, 0, 0x40, 0, 0, 0]);
+        data
+    }
+
+    fn two_by_two_indexed1_bmp_with_color_table(color_count: usize) -> Vec<u8> {
+        two_by_two_indexed_bmp_with_color_table(
+            BITS_PER_PIXEL_INDEXED1,
+            color_count,
+            &[0x80, 0, 0, 0, 0x40, 0, 0, 0],
+        )
+    }
+
+    fn two_by_two_indexed4_bmp() -> Vec<u8> {
+        two_by_two_indexed4_bmp_with_color_table(2)
+    }
+
+    fn two_by_two_indexed4_top_down_bmp() -> Vec<u8> {
+        let mut data = two_by_two_indexed4_bmp();
+        data[22..26].copy_from_slice(&(-2_i32).to_le_bytes());
+        data[62..70].copy_from_slice(&[0x10, 0, 0, 0, 0x01, 0, 0, 0]);
+        data
+    }
+
+    fn two_by_two_indexed4_bmp_with_color_table(color_count: usize) -> Vec<u8> {
+        two_by_two_indexed_bmp_with_color_table(
+            BITS_PER_PIXEL_INDEXED4,
+            color_count,
+            &[0x10, 0, 0, 0, 0x01, 0, 0, 0],
+        )
+    }
+
     fn two_by_two_indexed8_bmp() -> Vec<u8> {
         two_by_two_indexed8_bmp_with_color_table(2)
     }
@@ -1683,10 +1962,22 @@ mod tests {
     }
 
     fn two_by_two_indexed8_bmp_with_color_table(color_count: usize) -> Vec<u8> {
+        two_by_two_indexed_bmp_with_color_table(
+            BITS_PER_PIXEL_INDEXED8,
+            color_count,
+            &[1, 0, 0, 0, 0, 1, 0, 0],
+        )
+    }
+
+    fn two_by_two_indexed_bmp_with_color_table(
+        bits_per_pixel: u16,
+        color_count: usize,
+        pixel_array: &[u8],
+    ) -> Vec<u8> {
         let color_table_len = color_count * COLOR_TABLE_ENTRY_SIZE as usize;
         let pixel_offset = PIXEL_OFFSET as usize + color_table_len;
-        let pixel_array = [1, 0, 0, 0, 0, 1, 0, 0];
         let file_size = pixel_offset + pixel_array.len();
+        let max_colors = 1_usize << bits_per_pixel;
         let mut data = Vec::new();
 
         data.extend_from_slice(b"BM");
@@ -1699,13 +1990,13 @@ mod tests {
         data.extend_from_slice(&2_i32.to_le_bytes());
         data.extend_from_slice(&2_i32.to_le_bytes());
         data.extend_from_slice(&1_u16.to_le_bytes());
-        data.extend_from_slice(&8_u16.to_le_bytes());
+        data.extend_from_slice(&bits_per_pixel.to_le_bytes());
         data.extend_from_slice(&0_u32.to_le_bytes());
         data.extend_from_slice(&(pixel_array.len() as u32).to_le_bytes());
         data.extend_from_slice(&0_i32.to_le_bytes());
         data.extend_from_slice(&0_i32.to_le_bytes());
         data.extend_from_slice(
-            &(if color_count == 256 {
+            &(if color_count == max_colors {
                 0
             } else {
                 color_count as u32
@@ -1719,7 +2010,7 @@ mod tests {
         for _ in 2..color_count {
             data.extend_from_slice(&[0, 0, 0, 0]);
         }
-        data.extend_from_slice(&pixel_array);
+        data.extend_from_slice(pixel_array);
 
         data
     }

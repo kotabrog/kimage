@@ -159,15 +159,15 @@ BMP の DIB header では仕様上 1 でなければならない。
 `biPlanes != 1` は不正な header として扱う。
 
 `biBitCount` は 1 pixel あたりの bit 数を表す。
-初期版では 24-bit `BI_RGB` を対象にする。
+現行版では 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
 扱う bit depth は次の通りである。
 
 | `biBitCount` | 内容 | 扱い |
 | ---: | --- | --- |
 | 0 | encoded image format 側で bit depth が決まる | 対象外 |
-| 1 | indexed color | 後続版で追加予定 |
-| 4 | indexed color | 後続版で追加予定 |
-| 8 | indexed color | generic decode 対象、native decode / encode 対象 |
+| 1 | indexed color | generic decode 対象、native decode 対象 |
+| 4 | indexed color | generic decode 対象、native decode 対象 |
+| 8 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
 | 16 | true color | 後続版で追加予定 |
 | 24 | true color | generic decode / encode 対象、native decode / encode 対象 |
 | 32 | true color | 後続版で追加予定 |
@@ -185,6 +185,9 @@ B G R
 1-bit / 4-bit / 8-bit BMP は indexed color として扱う。
 pixel array には RGB 値ではなく color table の index が入る。
 color table の entry 数は `biClrUsed` で決まる。
+1-bit / 4-bit indexed color BMP の generic encode は後続版で検討する。
+8-bit indexed color BMP の generic encode は、
+明示 color table と auto indexed fallback の mode で対象にする。
 
 16-bit / 32-bit BMP は true color として扱う。
 `BI_BITFIELDS` / `BI_ALPHABITFIELDS` の場合は、
@@ -284,13 +287,20 @@ generic `Image` への decode では画像データの解釈には使わない�
 color table は indexed color BMP の palette である。
 color table は pixel array の前に置かれる。
 
-8-bit indexed color BMP は generic decode 対象、native decode / encode 対象とする。
+1-bit / 4-bit / 8-bit indexed color BMP は generic decode 対象、native decode 対象とする。
+8-bit indexed color BMP は generic encode / native encode 対象にも含める。
 generic decode では color table を使って `PixelFormat::Rgb8` に展開する。
 
-8-bit indexed color BMP の color table entry 数は次のように決める。
+indexed color BMP の color table entry 数は次のように決める。
 
-- `biClrUsed == 0`: bit depth から決まる最大 entry 数を使う。8-bit では 256 entries。
+- `biClrUsed == 0`: bit depth から決まる最大 entry 数を使う。
 - `biClrUsed != 0`: `biClrUsed` entries を使う。
+
+bit depth から決まる最大 entry 数は次の通りである。
+
+- 1-bit: 2 entries
+- 4-bit: 16 entries
+- 8-bit: 256 entries
 
 `biClrUsed` が bit depth から決まる最大 entry 数より大きい場合は不正な header として扱う。
 
@@ -323,8 +333,9 @@ generic `Image` への decode output は未定部分がある。
 現時点の予定は次の通りである。
 
 - 24-bit `BI_RGB`: `Rgb8`
+- 1-bit indexed color BMP: color table を使って `Rgb8` に展開する
+- 4-bit indexed color BMP: color table を使って `Rgb8` に展開する
 - 8-bit indexed color BMP: color table を使って `Rgb8` に展開する
-- 1-bit / 4-bit indexed color BMP: 後続版で検討
 - 16-bit true color BMP: 未定
 - 32-bit true color BMP: 未定
 - alpha 付き BMP: 未定
@@ -337,13 +348,27 @@ generic `Image` への decode output は未定部分がある。
 - `biWidth > 0`
 - `biHeight != 0`
 - `biPlanes == 1`
-- `biBitCount == 24`
+- `biBitCount == 1` / `4` / `8` / `24`
 - `biCompression == BI_RGB`
 - output は `PixelFormat::Rgb8`
 
-8-bit indexed color BMP では、color table の `RGBQUAD` entries を使って
+1-bit / 4-bit / 8-bit indexed color BMP では、color table の `RGBQUAD` entries を使って
 `PixelFormat::Rgb8` に展開する。
 color table entry の `reserved` byte は alpha として扱わず、画像データに反映しない。
+pixel index が color table の範囲外を参照する場合は不正な raster として扱う。
+
+1-bit indexed color BMP では、1 byte に 8 pixels の index が入る。
+file 上の左側の pixel から順に、byte の bit 7、bit 6、bit 5、bit 4、
+bit 3、bit 2、bit 1、bit 0 を読む。
+row 末尾で画像幅を超える余り bit は無視する。
+
+4-bit indexed color BMP では、1 byte に 2 pixels の index が入る。
+file 上の左側の pixel を high nibble、次の pixel を low nibble として読む。
+row 末尾で画像幅を超える余り nibble は無視する。
+
+1-bit / 4-bit / 8-bit indexed color BMP の row size は、
+bit depth と width から BMP の 4 byte alignment に従って計算する。
+decode 時は width 分の pixel だけを展開し、row padding は画像データに反映しない。
 
 24-bit `BI_RGB` では、file 上の pixel は `B G R` の順に並ぶ。
 decode ではこれを `Rgb8` の `R G B` に変換する。
@@ -466,9 +491,9 @@ native representation で保持する対象は以下である。
 - color table
 - pixel array
 
-8-bit indexed color BMP の native representation では、
+1-bit / 4-bit / 8-bit indexed color BMP の native representation では、
 `color_table` に `RGBQUAD` entries を保持し、
-`pixel_array` に index data と row padding を含む file 上の pixel array を保持する。
+`pixel_array` に packed index data と row padding を含む file 上の pixel array を保持する。
 
 BMP native representation は top-level native API にも追加し、
 `decode_native` / `encode_native` では `NativeImage::Bmp(BmpImage)` として扱う。
