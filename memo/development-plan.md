@@ -12,11 +12,11 @@
 
 - 初期版の generic decode / encode は `BITMAPINFOHEADER` を対象にする。
 - generic decode の bit depth は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
-- generic encode の bit depth は 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
+- generic encode の bit depth は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
 - native decode は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
-- native encode は 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
-- generic encode は、明示 color table による 8-bit indexed encode と、
-  256 色以下なら 8-bit indexed、257 色以上なら 24-bit に fallback する auto mode を持つ。
+- native encode は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
+- generic encode は、明示 color table による indexed encode と、
+  256 色以下なら最小 indexed bit depth、257 色以上なら 24-bit に fallback する auto mode を持つ。
 - bottom-up / top-down BMP を扱う。
 - generic decode の出力は `PixelFormat::Rgb8` とする。
 - BMP encode は `ImageView` と `BmpEncodeOptions` から `BmpImage` を構築し、その native representation を file bytes に書き出す。
@@ -31,7 +31,7 @@
 ## 現在の実装内容
 
 - `BmpEncodeOptions`
-- `BmpPixelEncoding::{Rgb24, Indexed8, AutoIndexed8OrRgb24}`
+- `BmpPixelEncoding::{Rgb24, Indexed1, Indexed4, Indexed8, AutoIndexedOrRgb24}`
 - `BmpOrientation::{BottomUp, TopDown}`
 - `BmpImage`
 - `BmpFileHeader`
@@ -41,7 +41,7 @@
 - `bmp::decode_native`
 - `bmp::encode_native`
 - `BmpImage::validate_file_layout`
-- 1-bit / 4-bit indexed BMP の generic decode / native decode
+- 1-bit / 4-bit indexed BMP の generic decode / encode、native decode / encode
 - 8-bit indexed BMP の generic decode / encode、native decode / encode
 - `image_view_to_bmp_native`
 - `NativeImage::Bmp(BmpImage)`

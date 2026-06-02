@@ -165,8 +165,8 @@ BMP の DIB header では仕様上 1 でなければならない。
 | `biBitCount` | 内容 | 扱い |
 | ---: | --- | --- |
 | 0 | encoded image format 側で bit depth が決まる | 対象外 |
-| 1 | indexed color | generic decode 対象、native decode 対象 |
-| 4 | indexed color | generic decode 対象、native decode 対象 |
+| 1 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
+| 4 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
 | 8 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
 | 16 | true color | 後続版で追加予定 |
 | 24 | true color | generic decode / encode 対象、native decode / encode 対象 |
@@ -185,8 +185,7 @@ B G R
 1-bit / 4-bit / 8-bit BMP は indexed color として扱う。
 pixel array には RGB 値ではなく color table の index が入る。
 color table の entry 数は `biClrUsed` で決まる。
-1-bit / 4-bit indexed color BMP の generic encode は後続版で検討する。
-8-bit indexed color BMP の generic encode は、
+1-bit / 4-bit / 8-bit indexed color BMP の generic encode は、
 明示 color table と auto indexed fallback の mode で対象にする。
 
 16-bit / 32-bit BMP は true color として扱う。
@@ -287,8 +286,8 @@ generic `Image` への decode では画像データの解釈には使わない�
 color table は indexed color BMP の palette である。
 color table は pixel array の前に置かれる。
 
-1-bit / 4-bit / 8-bit indexed color BMP は generic decode 対象、native decode 対象とする。
-8-bit indexed color BMP は generic encode / native encode 対象にも含める。
+1-bit / 4-bit / 8-bit indexed color BMP は generic decode / encode 対象、
+native decode / encode 対象とする。
 generic decode では color table を使って `PixelFormat::Rgb8` に展開する。
 
 indexed color BMP の color table entry 数は次のように決める。
@@ -423,28 +422,39 @@ row order は `BmpEncodeOptions` の orientation に従い、既定値は bottom
 pixel encoding は次を持つ。
 
 - `Rgb24`
+- `Indexed1 { color_table }`
+- `Indexed4 { color_table }`
 - `Indexed8 { color_table }`
-- `AutoIndexed8OrRgb24`
+- `AutoIndexedOrRgb24`
 
 `Rgb24` は `PixelFormat::Rgb8` の `ImageView` を受け付け、
 24-bit `BI_RGB` の `BITMAPINFOHEADER` BMP を生成する。
 color table は持たず、`biBitCount == 24`、`biClrUsed == 0`、
 `bfOffBits == 14 + 40` とする。
 
-`Indexed8 { color_table }` は、指定された color table を使って
-8-bit indexed `BI_RGB` の `BITMAPINFOHEADER` BMP を生成する。
-`color_table.len()` は `1..=256` とし、各 `RGBQUAD` entry の `reserved` は 0 でなければならない。
+`Indexed1 { color_table }` / `Indexed4 { color_table }` / `Indexed8 { color_table }` は、
+指定された color table を使って indexed `BI_RGB` の `BITMAPINFOHEADER` BMP を生成する。
+`color_table.len()` は bit depth の最大 entry 数以下とし、空であってはならない。
+最大 entry 数は 1-bit では 2、4-bit では 16、8-bit では 256 である。
+各 `RGBQUAD` entry の `reserved` は 0 でなければならない。
 入力画像の各 RGB 値は color table 内の RGB 値と完全一致する必要がある。
 一致する entry がない場合は encode error とし、近似色への変換や量子化はしない。
 同じ RGB 値が color table に複数ある場合は、最初の entry を使う。
-`biBitCount == 8`、`biClrUsed == color_table.len()`、
+`biBitCount` は指定した indexed bit depth、
+`biClrUsed == color_table.len()`、
 `bfOffBits == 14 + 40 + color_table.len() * 4` とする。
-pixel array は palette index byte と row padding を含む。
+pixel array は packed palette index と row padding を含む。
+1-bit では左から bit 7、bit 6、...、bit 0 の順に index を書く。
+row 末尾の余り bit は 0 とする。
+4-bit では左 pixel を high nibble、次の pixel を low nibble に書く。
+row 末尾の余り nibble は 0 とする。
+8-bit では 1 pixel を 1 byte の index として書く。
 
-`AutoIndexed8OrRgb24` は、入力画像を可逆に 8-bit indexed BMP で表現できる場合だけ
-8-bit indexed BMP を生成し、できない場合は 24-bit BMP に fallback する。
-入力画像内の unique RGB 色が 256 色以下なら、画像走査順に初出の色を追加した
-deterministic な color table を生成し、8-bit indexed BMP を出力する。
+`AutoIndexedOrRgb24` は、入力画像を可逆に indexed BMP で表現できる場合だけ
+indexed BMP を生成し、できない場合は 24-bit BMP に fallback する。
+入力画像内の unique RGB 色を画像走査順に集め、deterministic な color table を生成する。
+unique RGB 色が 2 色以下なら 1-bit indexed BMP、16 色以下なら 4-bit indexed BMP、
+256 色以下なら 8-bit indexed BMP を出力する。
 unique RGB 色が 257 色以上なら `Rgb24` と同じ 24-bit BMP を出力する。
 この mode では量子化、dithering、近似色変換は行わないため、常に可逆変換である。
 生成する color table entry の `reserved` は常に 0 とする。
