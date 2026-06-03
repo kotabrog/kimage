@@ -113,11 +113,13 @@ Supported:
 
 - uncompressed 24-bit bottom-up and top-down BMP
 - generic decode for uncompressed 1-bit, 4-bit, and 8-bit indexed BMP
+- generic decode for 16-bit and 32-bit `BI_BITFIELDS` BMP
 - generic encode for uncompressed 1-bit, 4-bit, and 8-bit indexed BMP with an explicit color table
 - generic encode that automatically uses the smallest lossless indexed BMP
   bit depth when the input has 256 or fewer colors, otherwise falling back to
   24-bit BMP
 - native decode for uncompressed 1-bit, 4-bit, and 8-bit indexed BMP
+- native decode for 16-bit and 32-bit `BI_BITFIELDS` BMP
 - native encode for uncompressed 1-bit, 4-bit, and 8-bit indexed BMP
 - `BITMAPINFOHEADER`
 - native BMP APIs that preserve BMP header fields and pixel array data

@@ -74,16 +74,19 @@ generic decode ではその gap bytes を無視し、native representation に�
 `BmpImage::validate_file_layout` では `bfOffBits == expected_min_pixel_offset` を要求する。
 `validate_file_layout` は、native representation が保持している領域だけで
 `encode_native` した場合に file layout が整合するかを確認するためである。
-初期版の 24-bit `BI_RGB` + `BITMAPINFOHEADER` では、
+24-bit `BI_RGB` + `BITMAPINFOHEADER` では、
 `expected_min_pixel_offset` は `14 + 40 = 54` である。
-8-bit indexed color BMP では、次の値になる。
+indexed color BMP では、次の値になる。
 
 ```text
 14 + 40 + color_table_entry_count * 4
 ```
 
-後続版で color masks を保持する場合は、
-その byte size も加えた値を `expected_min_pixel_offset` とする。
+`BITMAPINFOHEADER` + `BI_BITFIELDS` では、次の値になる。
+
+```text
+14 + 40 + 3 * 4
+```
 
 ## DIB header
 
@@ -159,7 +162,8 @@ BMP の DIB header では仕様上 1 でなければならない。
 `biPlanes != 1` は不正な header として扱う。
 
 `biBitCount` は 1 pixel あたりの bit 数を表す。
-現行版では 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
+現行仕様では 1-bit / 4-bit / 8-bit indexed `BI_RGB`、
+16-bit / 32-bit `BI_BITFIELDS`、24-bit `BI_RGB` を対象にする。
 扱う bit depth は次の通りである。
 
 | `biBitCount` | 内容 | 扱い |
@@ -168,9 +172,9 @@ BMP の DIB header では仕様上 1 でなければならない。
 | 1 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
 | 4 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
 | 8 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
-| 16 | true color | 後続版で追加予定 |
+| 16 | true color | generic decode 対象、native decode 対象 |
 | 24 | true color | generic decode / encode 対象、native decode / encode 対象 |
-| 32 | true color | 後続版で追加予定 |
+| 32 | true color | generic decode 対象、native decode 対象 |
 
 上記以外の `biBitCount` は unsupported format として扱う。
 `biBitCount == 0` は `BI_JPEG` / `BI_PNG` 向けの値だが、
@@ -194,13 +198,14 @@ pixel value の各 bit を color mask に従って channel value として解釈
 color mask の有無と置き場所は `biCompression` で決まる。
 
 `biCompression` は compression method を表す。
-初期版の generic decode / encode では `BI_RGB` のみを対象にする。
+現行仕様では generic decode / native decode で `BI_RGB` と `BI_BITFIELDS` を対象にする。
+generic encode / native encode では `BI_RGB` を対象にする。
 扱う compression は次の通りである。
 
 | compression | 内容 | 扱い |
 | --- | --- | --- |
-| `BI_RGB` | uncompressed RGB / indexed color | 初期版の対象 |
-| `BI_BITFIELDS` | RGB bit masks | 後続版で追加予定 |
+| `BI_RGB` | uncompressed RGB / indexed color | 現行版の対象 |
+| `BI_BITFIELDS` | RGB bit masks | generic decode 対象、native decode 対象 |
 | `BI_ALPHABITFIELDS` | RGBA bit masks / Windows CE 由来の拡張 | 後続版で追加予定 |
 | `BI_RLE8` | 8-bit indexed color RLE | 後続版で追加予定 |
 | `BI_RLE4` | 4-bit indexed color RLE | 後続版で追加予定 |
@@ -218,7 +223,7 @@ color mask の有無と置き場所は `biCompression` で決まる。
 `biCompression` には、GDI の BMP file で使われる値のほか、
 Windows CE 由来の拡張、CMYK 系、video frame 用の FOURCC value などが存在する。
 このクレートでは、BMP image file として扱う範囲に絞る。
-初期版では `BI_RGB` 以外の compression は unsupported format として扱う。
+`BI_RGB` と `BI_BITFIELDS` 以外の compression は unsupported format として扱う。
 そのため、現時点では RLE compression と top-down BMP の組み合わせも、
 unsupported format として扱う。
 後続版で RLE を decode 対象に追加する時点で、
@@ -236,12 +241,10 @@ decode 時は padding byte を読み飛ばす。
 ただし、`BI_ALPHABITFIELDS` は Windows desktop GDI の標準的な `BITMAPINFOHEADER`
 compression value ではなく、Windows CE 由来の拡張として扱う。
 
-`BITMAPINFOHEADER` で `BI_BITFIELDS` または `BI_ALPHABITFIELDS` の場合、
-color mask は DIB header の直後に置かれる。
-mask が重複している場合は不正な header として扱う。
-各 mask の set bit が連続していない場合は不正な header として扱う。
-必要な color mask が欠けている場合は不正な header として扱う。
-mask から取り出した channel value の正規化方法は未定。
+`BITMAPINFOHEADER` で `BI_BITFIELDS` の場合、
+color mask は DIB header の直後、color table の前に置かれる。
+3 個の color mask を red / green / blue の順に読み取る。
+`BI_ALPHABITFIELDS` は後続版で別途検討し、現時点では対象外にする。
 
 RLE では、encoded mode と absolute mode がある。
 また、次の escape を扱う必要がある。
@@ -280,6 +283,47 @@ pixel index が color table の範囲外を参照する場合は不正な raster
 `biClrImportant == 0` は、すべての color table entry が重要であることを表す。
 この field は palette device 向けの hint であり、
 generic `Image` への decode では画像データの解釈には使わない。
+
+## color masks
+
+color masks は `BI_BITFIELDS` / `BI_ALPHABITFIELDS` で使われる bit mask である。
+`BITMAPINFOHEADER` で `BI_BITFIELDS` の場合、color masks は DIB header の直後、
+color table の前に置かれる。
+
+`BITMAPINFOHEADER` + `BI_BITFIELDS` の 16-bit / 32-bit BMP は
+generic decode / native decode 対象である。
+`BI_BITFIELDS` では 3 個の mask を red / green / blue の順に保持する。
+native representation では `BmpImage::color_masks` に `[red, green, blue]` として保持する。
+
+`BI_ALPHABITFIELDS` は Windows CE 由来の拡張として扱い、対象外にする。
+`BITMAPV4HEADER` / `BITMAPV5HEADER` に含まれる color masks も後続版で別途扱う。
+
+`BI_BITFIELDS` の color masks について、次を不正な header として扱う。
+
+- mask が 3 個に満たない
+- mask が 0
+- red / green / blue mask が互いに重複している
+- mask の set bit が連続していない
+- mask が bit depth の範囲外の bit を参照している
+
+16-bit では mask の bit は lower 16 bits の範囲内でなければならない。
+32-bit では `u32` 全体の範囲を使える。
+
+generic decode では、pixel value に mask を適用して RGB channel value を取り出す。
+pixel value は little-endian として読む。
+16-bit では 1 pixel を `u16`、32-bit では 1 pixel を `u32` として読む。
+
+mask から取り出した channel value は、mask の bit 幅に応じて `0..=255` に正規化する。
+正規化は丸め込みを行う。
+
+```text
+raw = (pixel & mask) >> trailing_zeros(mask)
+max = (1 << mask_bit_count) - 1
+value8 = (raw * 255 + max / 2) / max
+```
+
+32-bit `BI_BITFIELDS` で mask に含まれない bit は generic decode では無視する。
+alpha 相当の bit が存在しても `BI_BITFIELDS` では alpha channel として扱わない。
 
 ## color table
 
@@ -327,29 +371,37 @@ ICC profile data を保持する native BMP API を用意するかは未定。
 
 ## decode output
 
-generic `Image` への decode output は未定部分がある。
-
-現時点の予定は次の通りである。
+generic `Image` への decode output は次の通りである。
 
 - 24-bit `BI_RGB`: `Rgb8`
 - 1-bit indexed color BMP: color table を使って `Rgb8` に展開する
 - 4-bit indexed color BMP: color table を使って `Rgb8` に展開する
 - 8-bit indexed color BMP: color table を使って `Rgb8` に展開する
-- 16-bit true color BMP: 未定
-- 32-bit true color BMP: 未定
+- 16-bit `BI_BITFIELDS`: color masks を使って `Rgb8` に展開する
+- 32-bit `BI_BITFIELDS`: color masks を使って `Rgb8` に展開する
 - alpha 付き BMP: 未定
 - color profile を持つ BMP: 色変換は行わない
 
-初期版の generic decode 対象は次の範囲に固定する。
+generic decode 対象は次の範囲に固定する。
 
 - `bfType == "BM"`
 - DIB header は `BITMAPINFOHEADER`
 - `biWidth > 0`
 - `biHeight != 0`
 - `biPlanes == 1`
-- `biBitCount == 1` / `4` / `8` / `24`
-- `biCompression == BI_RGB`
+- `biBitCount == 1` / `4` / `8` / `16` / `24` / `32`
+- `biCompression == BI_RGB` または `BI_BITFIELDS`
 - output は `PixelFormat::Rgb8`
+
+`BI_RGB` の generic decode 対象は次の通りである。
+
+- 1-bit / 4-bit / 8-bit indexed color BMP
+- 24-bit true color BMP
+
+`BI_BITFIELDS` の generic decode 対象は次の通りである。
+
+- 16-bit true color BMP
+- 32-bit true color BMP
 
 1-bit / 4-bit / 8-bit indexed color BMP では、color table の `RGBQUAD` entries を使って
 `PixelFormat::Rgb8` に展開する。
@@ -372,7 +424,11 @@ decode 時は width 分の pixel だけを展開し、row padding は画像デ�
 24-bit `BI_RGB` では、file 上の pixel は `B G R` の順に並ぶ。
 decode ではこれを `Rgb8` の `R G B` に変換する。
 
-初期版の generic decode では、metadata は保持しない。
+16-bit / 32-bit `BI_BITFIELDS` では、color masks から RGB channel を取り出し、
+`Rgb8` に正規化する。
+alpha 相当の bit や mask に含まれない bit は画像データに反映しない。
+
+generic decode では、metadata は保持しない。
 `bfReserved1` / `bfReserved2`、`bfSize`、`biSizeImage`、`biXPelsPerMeter`、`biYPelsPerMeter`、`biClrImportant` は、
 generic `Image` の pixel data には反映しない。
 
@@ -505,6 +561,10 @@ native representation で保持する対象は以下である。
 `color_table` に `RGBQUAD` entries を保持し、
 `pixel_array` に packed index data と row padding を含む file 上の pixel array を保持する。
 
+16-bit / 32-bit `BI_BITFIELDS` BMP の native representation では、
+`color_masks` に red / green / blue masks を保持し、
+`pixel_array` に little-endian pixel value と row padding を含む file 上の pixel array を保持する。
+
 BMP native representation は top-level native API にも追加し、
 `decode_native` / `encode_native` では `NativeImage::Bmp(BmpImage)` として扱う。
 `encode_native` は native representation の field をできるだけそのまま書き出す API であり、
@@ -521,9 +581,11 @@ generic encode のような正規化 API ではない。
 
 - `bfOffBits == expected_min_pixel_offset`
 - `bfSize == bfOffBits + pixel_array.len()`
-- `BI_RGB` では、`biSizeImage == 0` または `biSizeImage == pixel_array.len()`
+- `BI_RGB` / `BI_BITFIELDS` では、`biSizeImage == 0` または `biSizeImage == pixel_array.len()`
 - `pixel_array.len()` が row size と height から計算した必要量と一致する
 - color table entry の `reserved == 0`
+- `BI_BITFIELDS` では `color_masks.len() == 3`
+- `BI_BITFIELDS` では color masks が non-zero、重複なし、連続 bit、bit depth 内である
 
 `decode_native` は unknown gap bytes を保持しないため、
 `decode_native` で得た `BmpImage` が常に `validate_file_layout` を通るとは限らない。
@@ -552,6 +614,8 @@ byte-for-byte roundtrip は目標にしない。
 - mask が重複している
 - mask の set bit が連続していない
 - 必要な mask が欠けている
+- mask が bit depth の範囲外の bit を参照している
+- `BI_ALPHABITFIELDS`
 
 対応外の DIB header、bit depth、compression は unsupported format として扱う。
 `bfSize` と実データ長の不一致は、それだけでは不正な入力として扱わない。

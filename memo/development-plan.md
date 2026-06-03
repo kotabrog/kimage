@@ -11,9 +11,9 @@
 現行の実装方針:
 
 - 初期版の generic decode / encode は `BITMAPINFOHEADER` を対象にする。
-- generic decode の bit depth は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
+- generic decode の bit depth は 1-bit / 4-bit / 8-bit indexed `BI_RGB`、24-bit `BI_RGB`、16-bit / 32-bit `BI_BITFIELDS` を対象にする。
 - generic encode の bit depth は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
-- native decode は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
+- native decode は 1-bit / 4-bit / 8-bit indexed `BI_RGB`、24-bit `BI_RGB`、16-bit / 32-bit `BI_BITFIELDS` を対象にする。
 - native encode は 1-bit / 4-bit / 8-bit indexed `BI_RGB` と 24-bit `BI_RGB` を対象にする。
 - generic encode は、明示 color table による indexed encode と、
   256 色以下なら最小 indexed bit depth、257 色以上なら 24-bit に fallback する auto mode を持つ。
@@ -43,6 +43,7 @@
 - `BmpImage::validate_file_layout`
 - 1-bit / 4-bit indexed BMP の generic decode / encode、native decode / encode
 - 8-bit indexed BMP の generic decode / encode、native decode / encode
+- 16-bit / 32-bit `BI_BITFIELDS` BMP の generic decode、native decode
 - `image_view_to_bmp_native`
 - `NativeImage::Bmp(BmpImage)`
 - `EncodeFormat::Bmp(BmpEncodeOptions)`
@@ -78,9 +79,7 @@
 
 ### 6. 16-bit / 32-bit `BI_BITFIELDS`
 
-- color masks を読み取る。
-- mask の重複、連続 bit、必要 mask の欠落を validation する。
-- mask から取り出した channel value の正規化方法を仕様化して実装する。
+- 実装済み。
 
 ### 7. `BITMAPV4HEADER` / `BITMAPV5HEADER`
 
