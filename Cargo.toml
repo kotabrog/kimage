@@ -23,6 +23,10 @@ name = "bmp_indexed8_native_roundtrip"
 required-features = ["bmp"]
 
 [[example]]
+name = "bmp_bitfields32_native_roundtrip"
+required-features = ["bmp"]
+
+[[example]]
 name = "pam_roundtrip"
 required-features = ["netpbm"]
 

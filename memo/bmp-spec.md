@@ -172,9 +172,9 @@ BMP の DIB header では仕様上 1 でなければならない。
 | 1 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
 | 4 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
 | 8 | indexed color | generic decode / encode 対象、native decode / encode 対象 |
-| 16 | true color | generic decode 対象、native decode 対象 |
+| 16 | true color | generic decode / encode 対象、native decode / encode 対象 |
 | 24 | true color | generic decode / encode 対象、native decode / encode 対象 |
-| 32 | true color | generic decode 対象、native decode 対象 |
+| 32 | true color | generic decode / encode 対象、native decode / encode 対象 |
 
 上記以外の `biBitCount` は unsupported format として扱う。
 `biBitCount == 0` は `BI_JPEG` / `BI_PNG` 向けの値だが、
@@ -198,14 +198,14 @@ pixel value の各 bit を color mask に従って channel value として解釈
 color mask の有無と置き場所は `biCompression` で決まる。
 
 `biCompression` は compression method を表す。
-現行仕様では generic decode / native decode で `BI_RGB` と `BI_BITFIELDS` を対象にする。
-generic encode / native encode では `BI_RGB` を対象にする。
+現行仕様では generic decode / encode、native decode / encode で
+`BI_RGB` と `BI_BITFIELDS` を対象にする。
 扱う compression は次の通りである。
 
 | compression | 内容 | 扱い |
 | --- | --- | --- |
-| `BI_RGB` | uncompressed RGB / indexed color | 現行版の対象 |
-| `BI_BITFIELDS` | RGB bit masks | generic decode 対象、native decode 対象 |
+| `BI_RGB` | uncompressed RGB / indexed color | generic decode / encode 対象、native decode / encode 対象 |
+| `BI_BITFIELDS` | RGB bit masks | generic decode / encode 対象、native decode / encode 対象 |
 | `BI_ALPHABITFIELDS` | RGBA bit masks / Windows CE 由来の拡張 | 後続版で追加予定 |
 | `BI_RLE8` | 8-bit indexed color RLE | 後続版で追加予定 |
 | `BI_RLE4` | 4-bit indexed color RLE | 後続版で追加予定 |
@@ -291,7 +291,7 @@ color masks は `BI_BITFIELDS` / `BI_ALPHABITFIELDS` で使われる bit mask �
 color table の前に置かれる。
 
 `BITMAPINFOHEADER` + `BI_BITFIELDS` の 16-bit / 32-bit BMP は
-generic decode / native decode 対象である。
+generic decode / encode 対象、native decode / encode 対象である。
 `BI_BITFIELDS` では 3 個の mask を red / green / blue の順に保持する。
 native representation では `BmpImage::color_masks` に `[red, green, blue]` として保持する。
 
@@ -481,6 +481,8 @@ pixel encoding は次を持つ。
 - `Indexed1 { color_table }`
 - `Indexed4 { color_table }`
 - `Indexed8 { color_table }`
+- `Bitfields16 { red_mask, green_mask, blue_mask }`
+- `Bitfields32 { red_mask, green_mask, blue_mask }`
 - `AutoIndexedOrRgb24`
 
 `Rgb24` は `PixelFormat::Rgb8` の `ImageView` を受け付け、
@@ -506,6 +508,31 @@ row 末尾の余り bit は 0 とする。
 row 末尾の余り nibble は 0 とする。
 8-bit では 1 pixel を 1 byte の index として書く。
 
+`Bitfields16 { red_mask, green_mask, blue_mask }` /
+`Bitfields32 { red_mask, green_mask, blue_mask }` は、
+指定された color masks を使って 16-bit / 32-bit `BI_BITFIELDS` の
+`BITMAPINFOHEADER` BMP を生成する。
+`color_masks` は red / green / blue の順で保持する。
+`color_table` は持たず、`biCompression == BI_BITFIELDS`、
+`biClrUsed == 0`、`bfOffBits == 14 + 40 + 3 * 4` とする。
+
+指定された color masks は、decode と同じ条件で検査する。
+mask は 0 であってはならず、red / green / blue mask は互いに重複してはならない。
+mask の set bit は連続していなければならない。
+16-bit では mask の bit は lower 16 bits の範囲内でなければならない。
+
+入力画像の `Rgb8` channel value は、mask の bit 幅に応じて丸め込みで量子化する。
+
+```text
+max = (1 << mask_bit_count) - 1
+raw = (value8 * max + 255 / 2) / 255
+pixel |= raw << trailing_zeros(mask)
+```
+
+16-bit では 1 pixel を `u16` little-endian、
+32-bit では 1 pixel を `u32` little-endian として書く。
+row は BMP の 4 byte alignment に従い、padding byte は 0 とする。
+
 `AutoIndexedOrRgb24` は、入力画像を可逆に indexed BMP で表現できる場合だけ
 indexed BMP を生成し、できない場合は 24-bit BMP に fallback する。
 入力画像内の unique RGB 色を画像走査順に集め、deterministic な color table を生成する。
@@ -525,7 +552,6 @@ unique RGB 色が 257 色以上なら `Rgb24` と同じ 24-bit BMP を出力す�
 - `Gray8`
 - `Gray16` / `Rgb16` / `Rgba16` / gray alpha formats
 - lossy indexed color quantization
-- 16-bit / 32-bit `BI_BITFIELDS`
 - `BITMAPV4HEADER` / `BITMAPV5HEADER`
 - color space metadata
 - ICC profile data
